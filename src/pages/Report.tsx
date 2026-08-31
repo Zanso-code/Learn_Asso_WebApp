@@ -110,7 +110,15 @@ export function Report() {
       <Card className="print-root mx-auto max-w-[210mm] p-6 sm:p-10">
         <header className="avoid-break border-b-2 border-navy-900 pb-4">
           <div className="flex items-start justify-between gap-6">
-            <div>
+            <div className="flex items-start gap-4">
+              {db.association.logo && (
+                <img
+                  src={db.association.logo}
+                  alt=""
+                  className="size-16 shrink-0 object-contain"
+                />
+              )}
+              <div>
               <h1 className="text-xl leading-tight font-extrabold text-navy-900 sm:text-2xl">
                 {db.association.name}
               </h1>
@@ -120,6 +128,7 @@ export function Report() {
               <p className="mt-1 text-sm text-navy-600">
                 {[db.association.city, db.association.country].filter(Boolean).join(', ')}
               </p>
+              </div>
             </div>
             <div className="text-right text-xs text-navy-600">
               <p className="font-bold text-navy-900">Document interne</p>

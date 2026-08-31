@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChart3,
+  CalendarClock,
   Eye,
   FileText,
   HandCoins,
   LayoutGrid,
+  LifeBuoy,
+  LogOut,
   Receipt,
   Settings,
   ShieldCheck,
@@ -13,8 +16,11 @@ import {
   Wallet,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
+import { usePlatform } from '@/lib/platform'
+import { hasAccess, joursRestants } from '@/lib/subscription'
 import { Modal, cx } from './ui'
 import { useToast } from './Toast'
+import { TreasurerUnlockModal } from './TreasurerUnlock'
 
 interface NavItem {
   to: string
@@ -35,34 +41,43 @@ const NAV: NavItem[] = [
 
 const MOBILE_NAV = NAV.filter((n) => n.to !== '/app/campagnes' && n.to !== '/app/rapport')
 
+/** Show the renewal warning this many days before the cut-off. */
+const WARN_DAYS = 7
+
 export function Layout() {
-  const { db, role, setRole } = useStore()
+  const { db, role } = useStore()
+  const { account, session, lockTreasurer } = usePlatform()
   const navigate = useNavigate()
   const location = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
+  const [unlockOpen, setUnlockOpen] = useState(false)
   const toast = useToast()
-
-  useEffect(() => {
-    if (!db) navigate('/', { replace: true })
-  }, [db, navigate])
 
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [location.pathname])
 
-  if (!db) return null // the effect above bounces to the landing page
+  // ---- Guards. Order matters: identify, then check the subscription, then data.
+  if (!session || !account) return <Navigate to="/connexion" replace />
+  if (!hasAccess(account)) return <Navigate to="/acces-expire" replace />
+  if (!db) return <Navigate to="/connexion" replace />
 
   const isViewer = role === 'viewer'
+  const daysLeft = joursRestants(account.date_expiration_acces)
 
-  function toggleRole() {
-    const next = isViewer ? 'treasurer' : 'viewer'
-    setRole(next)
-    toast.toast(
-      next === 'treasurer'
-        ? 'Mode Trésorier — accès complet en écriture'
-        : 'Mode Président / Secrétaire — lecture seule',
-      'info',
-    )
+  function handleRoleButton() {
+    if (isViewer) {
+      setUnlockOpen(true)
+      return
+    }
+    lockTreasurer()
+    toast.toast('Mode Président / Secrétaire — lecture seule', 'info')
+  }
+
+  // The sign-out itself happens on /deconnexion: see that route for why the
+  // session must not be cleared while this Layout is still mounted.
+  function handleLogout() {
+    navigate('/deconnexion', { replace: true })
   }
 
   return (
@@ -71,9 +86,17 @@ export function Layout() {
       <header className="no-print sticky top-0 z-40 border-b border-navy-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-3 sm:h-16 sm:px-6">
           <NavLink to="/app" className="flex min-w-0 items-center gap-2.5">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-white">
-              <BarChart3 className="size-5" />
-            </span>
+            {db.association.logo ? (
+              <img
+                src={db.association.logo}
+                alt=""
+                className="size-9 shrink-0 rounded-xl border border-navy-200 bg-white object-contain"
+              />
+            ) : (
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-white">
+                <BarChart3 className="size-5" />
+              </span>
+            )}
             <span className="min-w-0">
               <span className="block truncate text-sm leading-tight font-extrabold text-navy-900">
                 {db.association.acronym || db.association.name}
@@ -107,8 +130,8 @@ export function Layout() {
 
           <div className="ml-auto flex items-center gap-1.5 lg:ml-0">
             <button
-              onClick={toggleRole}
-              title="Changer de rôle"
+              onClick={handleRoleButton}
+              title={isViewer ? 'Passer en mode Trésorier' : 'Revenir en lecture seule'}
               className={cx(
                 'flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-bold transition sm:px-3',
                 isViewer
@@ -137,8 +160,26 @@ export function Layout() {
             >
               <Settings className="size-5" />
             </NavLink>
+
+            <button
+              onClick={handleLogout}
+              className="flex size-9 items-center justify-center rounded-lg text-navy-500 transition hover:bg-red-50 hover:text-red-600"
+              aria-label="Se déconnecter"
+              title="Se déconnecter"
+            >
+              <LogOut className="size-5" />
+            </button>
           </div>
         </div>
+
+        {daysLeft <= WARN_DAYS && (
+          <div className="flex items-center justify-center gap-2 border-t border-amber-200 bg-amber-50 px-3 py-1.5 text-center text-xs font-semibold text-amber-800 sm:px-6">
+            <CalendarClock className="size-3.5 shrink-0" />
+            {daysLeft === 0
+              ? "Votre accès expire aujourd'hui — pensez à renouveler l'abonnement."
+              : `Votre accès expire dans ${daysLeft} jour${daysLeft > 1 ? 's' : ''} — pensez à renouveler l'abonnement.`}
+          </div>
+        )}
 
         {isViewer && (
           <div className="border-t border-navy-200 bg-navy-900 px-3 py-1.5 text-center text-xs font-semibold text-navy-100 sm:px-6">
@@ -150,6 +191,20 @@ export function Layout() {
       {/* ------------------------------------------------------------ Pages */}
       <main className="mx-auto max-w-7xl px-3 pt-4 pb-24 sm:px-6 sm:pb-10">
         <Outlet />
+
+        {/* Vendor signature. no-print keeps it off the A4 AG report, which
+            carries the association's own letterhead, not ours. */}
+        <p className="no-print mt-8 flex items-center justify-center gap-2 text-[11px] text-navy-400">
+          <img
+            src="/brand/zansotech-mark.png"
+            alt=""
+            width={360}
+            height={162}
+            className="h-4 w-auto"
+            aria-hidden
+          />
+          Propulsé par ZansoTech
+        </p>
       </main>
 
       {/* ------------------------------------------------- Bottom nav (mobile) */}
@@ -211,8 +266,28 @@ export function Layout() {
               {label}
             </NavLink>
           ))}
+          <NavLink
+            to="/contact"
+            onClick={() => setMoreOpen(false)}
+            className="flex items-center gap-3 rounded-xl border border-navy-200 px-4 py-3.5 font-semibold text-navy-800 transition hover:bg-navy-50"
+          >
+            <LifeBuoy className="size-5 text-brand-600" />
+            Nous contacter
+          </NavLink>
+          <button
+            onClick={() => {
+              setMoreOpen(false)
+              handleLogout()
+            }}
+            className="flex items-center gap-3 rounded-xl border border-red-200 px-4 py-3.5 text-left font-semibold text-red-700 transition hover:bg-red-50"
+          >
+            <LogOut className="size-5" />
+            Se déconnecter
+          </button>
         </div>
       </Modal>
+
+      <TreasurerUnlockModal open={unlockOpen} onClose={() => setUnlockOpen(false)} />
     </div>
   )
 }

@@ -1,19 +1,31 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
+  CalendarClock,
   Database,
   Download,
   Eye,
+  FileSpreadsheet,
+  KeyRound,
+  LifeBuoy,
   RotateCcw,
   ShieldCheck,
   Trash2,
   Upload,
 } from 'lucide-react'
 import { useDB } from '@/lib/store'
+import { usePlatform } from '@/lib/platform'
 import { useToast } from '@/components/Toast'
+import { TreasurerUnlockModal } from '@/components/TreasurerUnlock'
+import { LogoPicker } from '@/components/LogoPicker'
 import { totals } from '@/lib/selectors'
-import { formatXOF, periodLabel } from '@/lib/format'
+import { formatDate, formatXOF, periodLabel } from '@/lib/format'
+import { passwordProblem } from '@/lib/auth'
+import { ExcelImportError, describeImport, exportWorkbook, importWorkbook } from '@/lib/excel'
+import { effectiveStatus, joursRestants, statusLabel } from '@/lib/subscription'
+import type { DB } from '@/lib/types'
 import {
+  Badge,
   Button,
   Card,
   CardHeader,
@@ -21,17 +33,24 @@ import {
   Input,
   Modal,
   PageHeader,
+  PasswordInput,
   Select,
   cx,
 } from '@/components/ui'
 
 export function SettingsPage() {
   const store = useDB()
-  const { db, role, setRole, isTreasurer } = store
+  const { db, role, isTreasurer } = store
+  const { account, lockTreasurer, changeTreasurerPassword, changeAccountPassword } = usePlatform()
   const toast = useToast()
-  const navigate = useNavigate()
 
   const [confirmReset, setConfirmReset] = useState(false)
+  const [unlockOpen, setUnlockOpen] = useState(false)
+  const [passwordModal, setPasswordModal] = useState<'tresorier' | 'compte' | null>(null)
+  const [pendingImport, setPendingImport] = useState<DB | null>(null)
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
   const t = totals(db)
   const a = db.association
 
@@ -43,12 +62,45 @@ export function SettingsPage() {
     link.download = `${a.acronym || 'association'}-sauvegarde-${new Date().toISOString().slice(0, 10)}.json`
     link.click()
     URL.revokeObjectURL(url)
-    toast.success('Sauvegarde téléchargée')
+    toast.success('Sauvegarde JSON téléchargée')
+  }
+
+  async function exportExcel() {
+    setBusy(true)
+    try {
+      await exportWorkbook(db)
+      toast.success('Sauvegarde Excel téléchargée')
+    } catch (err) {
+      console.error(err)
+      toast.error("Export impossible. Réessayez depuis un navigateur à jour.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return
+    setBusy(true)
+    try {
+      setPendingImport(await importWorkbook(file, db))
+    } catch (err) {
+      // A rejected spreadsheet is expected user input, not a defect — the toast
+      // already explains it. Only genuine faults deserve console.error.
+      if (err instanceof ExcelImportError) {
+        toast.error(err.message)
+      } else {
+        console.error(err)
+        toast.error('Fichier illisible ou format inattendu.')
+      }
+    } finally {
+      setBusy(false)
+      if (fileRef.current) fileRef.current.value = '' // allow re-picking the same file
+    }
   }
 
   return (
     <>
-      <PageHeader title="Paramètres" subtitle="Association, rôle et données locales" />
+      <PageHeader title="Paramètres" subtitle="Association, accès, rôles et sauvegardes" />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* ------------------------------------------------------ Identity */}
@@ -58,6 +110,14 @@ export function SettingsPage() {
             subtitle="Repris dans l'en-tête et le rapport d'AG"
           />
           <div className="grid gap-4 p-4">
+            <Field label="Logo de l'association" hint="Apparaît dans l'en-tête et sur le rapport d'AG.">
+              <LogoPicker
+                value={a.logo}
+                onChange={(logo) => store.updateAssociation({ logo })}
+                disabled={!isTreasurer}
+              />
+            </Field>
+
             <Field label="Nom complet">
               <Input
                 value={a.name}
@@ -136,56 +196,123 @@ export function SettingsPage() {
         </Card>
 
         <div className="grid content-start gap-4">
+          {/* --------------------------------------------------- Abonnement */}
+          {account && (
+            <Card>
+              <CardHeader title="Abonnement" subtitle="Géré par votre fournisseur AssoCaisse" />
+              <div className="grid gap-3 p-4 sm:grid-cols-3">
+                <div className="rounded-lg bg-navy-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold text-navy-500">Statut</p>
+                  <Badge
+                    tone={
+                      effectiveStatus(account) === 'actif'
+                        ? 'brand'
+                        : effectiveStatus(account) === 'essai'
+                          ? 'navy'
+                          : 'amber'
+                    }
+                    className="mt-1"
+                  >
+                    {statusLabel(effectiveStatus(account))}
+                  </Badge>
+                </div>
+                <div className="rounded-lg bg-navy-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold text-navy-500">Expire le</p>
+                  <p className="tnum text-sm font-bold text-navy-900">
+                    {formatDate(account.date_expiration_acces)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-navy-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold text-navy-500">Jours restants</p>
+                  <p className="tnum flex items-center gap-1 text-sm font-bold text-navy-900">
+                    <CalendarClock className="size-3.5 text-navy-400" />
+                    {Math.max(0, joursRestants(account.date_expiration_acces))}
+                  </p>
+                </div>
+              </div>
+              <div className="px-4 pb-4">
+                <Link
+                  to="/contact"
+                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-navy-300 bg-white px-4 text-sm font-semibold text-navy-800 transition hover:bg-navy-50"
+                >
+                  <LifeBuoy className="size-4" />
+                  Renouveler / nous contacter
+                </Link>
+              </div>
+            </Card>
+          )}
+
           {/* ------------------------------------------------------- Roles */}
           <Card>
             <CardHeader
               title="Rôle actif"
-              subtitle="Basculez pour présenter les deux vues en réunion"
+              subtitle="Le rôle Trésorier est protégé par son propre mot de passe"
             />
             <div className="grid gap-2.5 p-4">
-              {(
-                [
-                  [
-                    'treasurer',
-                    'Trésorier (Administrateur)',
-                    'Accès complet : membres, cotisations, campagnes, dépenses.',
-                    ShieldCheck,
-                  ],
-                  [
-                    'viewer',
-                    'Président / Secrétaire',
-                    'Lecture seule : tableaux de bord, relevés et rapports, sans boutons de modification.',
-                    Eye,
-                  ],
-                ] as const
-              ).map(([value, label, description, Icon]) => (
-                <button
-                  key={value}
-                  onClick={() => {
-                    setRole(value)
-                    toast.toast(`Rôle actif : ${label}`, 'info')
-                  }}
+              <button
+                onClick={() => {
+                  if (isTreasurer) setPasswordModal('tresorier')
+                  else setUnlockOpen(true)
+                }}
+                className={cx(
+                  'flex items-start gap-3 rounded-xl border-2 p-3.5 text-left transition',
+                  isTreasurer ? 'border-brand-500 bg-brand-50' : 'border-navy-200 hover:bg-navy-50',
+                )}
+              >
+                <ShieldCheck
                   className={cx(
-                    'flex items-start gap-3 rounded-xl border-2 p-3.5 text-left transition',
-                    role === value
-                      ? 'border-brand-500 bg-brand-50'
-                      : 'border-navy-200 hover:bg-navy-50',
+                    'mt-0.5 size-5 shrink-0',
+                    isTreasurer ? 'text-brand-600' : 'text-navy-400',
                   )}
-                >
-                  <Icon
-                    className={cx(
-                      'mt-0.5 size-5 shrink-0',
-                      role === value ? 'text-brand-600' : 'text-navy-400',
-                    )}
-                  />
-                  <span>
-                    <span className="block text-sm font-bold text-navy-900">{label}</span>
-                    <span className="mt-0.5 block text-xs leading-relaxed text-navy-600">
-                      {description}
-                    </span>
+                />
+                <span>
+                  <span className="block text-sm font-bold text-navy-900">
+                    Trésorier (Administrateur)
                   </span>
-                </button>
-              ))}
+                  <span className="mt-0.5 block text-xs leading-relaxed text-navy-600">
+                    {isTreasurer
+                      ? 'Actif. Touchez pour modifier le mot de passe Trésorier.'
+                      : 'Accès complet : membres, cotisations, campagnes, dépenses. Touchez pour saisir le mot de passe.'}
+                  </span>
+                </span>
+              </button>
+
+              <button
+                onClick={() => {
+                  if (!isTreasurer) return
+                  lockTreasurer()
+                  toast.toast('Rôle actif : Président / Secrétaire', 'info')
+                }}
+                className={cx(
+                  'flex items-start gap-3 rounded-xl border-2 p-3.5 text-left transition',
+                  role === 'viewer'
+                    ? 'border-brand-500 bg-brand-50'
+                    : 'border-navy-200 hover:bg-navy-50',
+                )}
+              >
+                <Eye
+                  className={cx(
+                    'mt-0.5 size-5 shrink-0',
+                    role === 'viewer' ? 'text-brand-600' : 'text-navy-400',
+                  )}
+                />
+                <span>
+                  <span className="block text-sm font-bold text-navy-900">
+                    Président / Secrétaire
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-navy-600">
+                    Lecture seule : tableaux de bord, relevés et rapports, sans boutons de
+                    modification.
+                  </span>
+                </span>
+              </button>
+
+              {isTreasurer && (
+                <Button variant="outline" onClick={() => setPasswordModal('compte')}>
+                  <KeyRound className="size-4" />
+                  Modifier le mot de passe du compte
+                </Button>
+              )}
             </div>
           </Card>
 
@@ -210,27 +337,41 @@ export function SettingsPage() {
               </dl>
 
               <div className="grid gap-2">
-                <Button variant="outline" onClick={exportJSON}>
-                  <Download className="size-4" />
-                  Exporter une sauvegarde (JSON)
+                <Button variant="outline" onClick={exportExcel} disabled={busy}>
+                  <FileSpreadsheet className="size-4" />
+                  Exporter la sauvegarde (Excel)
                 </Button>
+
                 {isTreasurer && (
                   <>
                     <Button
                       variant="outline"
-                      onClick={() => {
-                        store.loadDemo()
-                        toast.success('Données de démonstration rechargées')
-                      }}
+                      onClick={() => fileRef.current?.click()}
+                      disabled={busy}
                     >
-                      <RotateCcw className="size-4" />
-                      Recharger les données de démo
+                      <Upload className="size-4" />
+                      Importer une sauvegarde (Excel)
                     </Button>
-                    <Button variant="danger" onClick={() => setConfirmReset(true)}>
-                      <Trash2 className="size-4" />
-                      Effacer toutes les données
-                    </Button>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      className="hidden"
+                      onChange={(e) => void handleFile(e.target.files?.[0])}
+                    />
                   </>
+                )}
+
+                <Button variant="outline" onClick={exportJSON}>
+                  <Download className="size-4" />
+                  Exporter une copie technique (JSON)
+                </Button>
+
+                {isTreasurer && (
+                  <Button variant="danger" onClick={() => setConfirmReset(true)}>
+                    <Trash2 className="size-4" />
+                    Vider les données de l'association
+                  </Button>
                 )}
               </div>
 
@@ -238,17 +379,68 @@ export function SettingsPage() {
                 <Database className="mt-0.5 size-4 shrink-0 text-navy-400" />
                 Tout est enregistré dans le navigateur de cet appareil : les données restent
                 privées et l'application fonctionne sans connexion. Exportez régulièrement une
-                sauvegarde avant de changer de téléphone ou de vider le cache.
+                sauvegarde avant de changer de téléphone ou de vider le cache. Les photos de
+                justificatifs ne sont pas incluses dans le fichier Excel.
               </p>
             </div>
           </Card>
         </div>
       </div>
 
+      {/* --------------------------------------------------------- Modals */}
+
+      <TreasurerUnlockModal open={unlockOpen} onClose={() => setUnlockOpen(false)} />
+
+      <ChangePasswordModal
+        kind={passwordModal}
+        onClose={() => setPasswordModal(null)}
+        onSubmit={(current, next) =>
+          passwordModal === 'compte'
+            ? changeAccountPassword(current, next)
+            : changeTreasurerPassword(current, next)
+        }
+      />
+
+      <Modal
+        open={Boolean(pendingImport)}
+        onClose={() => setPendingImport(null)}
+        title="Restaurer cette sauvegarde ?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setPendingImport(null)}>
+              Annuler
+            </Button>
+            <Button
+              onClick={() => {
+                if (!pendingImport) return
+                store.replaceDB(pendingImport)
+                setPendingImport(null)
+                toast.success('Sauvegarde restaurée')
+              }}
+            >
+              <RotateCcw className="size-4" />
+              Restaurer
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-navy-600">
+          Le fichier contient&nbsp;:
+          <span className="mt-2 block font-semibold text-navy-900">
+            {pendingImport ? describeImport(pendingImport) : ''}
+          </span>
+        </p>
+        <p className="mt-3 rounded-xl bg-amber-50 px-3.5 py-3 text-xs leading-relaxed text-amber-800">
+          Ces données <strong>remplacent intégralement</strong> le contenu actuel de l'association.
+          Exportez d'abord une sauvegarde si vous souhaitez conserver l'état présent. Les photos de
+          justificatifs ne sont restaurées que sur l'appareil où elles ont été prises.
+        </p>
+      </Modal>
+
       <Modal
         open={confirmReset}
         onClose={() => setConfirmReset(false)}
-        title="Effacer toutes les données ?"
+        title="Vider les données de l'association ?"
         footer={
           <>
             <Button variant="ghost" onClick={() => setConfirmReset(false)}>
@@ -257,10 +449,9 @@ export function SettingsPage() {
             <Button
               variant="danger"
               onClick={() => {
-                store.resetAll()
+                store.resetLedger()
                 setConfirmReset(false)
-                toast.toast("Toutes les données ont été effacées", 'info')
-                navigate('/')
+                toast.toast('Les données ont été effacées', 'info')
               }}
             >
               <Trash2 className="size-4" />
@@ -271,13 +462,118 @@ export function SettingsPage() {
       >
         <p className="text-sm leading-relaxed text-navy-600">
           Membres, cotisations, campagnes, dépenses et justificatifs photographiés seront
-          définitivement supprimés de cet appareil. Cette action est irréversible.
+          définitivement supprimés. Le compte de l'association et son abonnement sont conservés.
+          Cette action est irréversible.
         </p>
         <div className="mt-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-3 text-xs leading-relaxed text-amber-800">
           <Upload className="mt-0.5 size-4 shrink-0" />
-          Exportez d'abord une sauvegarde JSON si vous souhaitez conserver l'historique.
+          Exportez d'abord une sauvegarde Excel si vous souhaitez conserver l'historique.
         </div>
       </Modal>
     </>
+  )
+}
+
+/* ------------------------------------------------------- Password change */
+
+function ChangePasswordModal({
+  kind,
+  onClose,
+  onSubmit,
+}: {
+  kind: 'tresorier' | 'compte' | null
+  onClose: () => void
+  onSubmit: (current: string, next: string) => Promise<boolean>
+}) {
+  const toast = useToast()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  function close() {
+    setCurrent('')
+    setNext('')
+    setConfirm('')
+    setError('')
+    onClose()
+  }
+
+  async function submit() {
+    const problem = passwordProblem(next)
+    if (problem) return setError(problem)
+    if (next !== confirm) return setError('Les deux nouveaux mots de passe ne correspondent pas.')
+    setBusy(true)
+    const ok = await onSubmit(current, next)
+    setBusy(false)
+    if (!ok) {
+      setError('Mot de passe actuel incorrect.')
+      setCurrent('')
+      return
+    }
+    toast.success('Mot de passe modifié')
+    close()
+  }
+
+  const isTreasurerPwd = kind === 'tresorier'
+
+  return (
+    <Modal
+      open={kind !== null}
+      onClose={close}
+      title={isTreasurerPwd ? 'Mot de passe Trésorier' : 'Mot de passe du compte'}
+      subtitle={
+        isTreasurerPwd
+          ? "Il débloque l'écriture. Ne le partagez qu'avec le Trésorier."
+          : 'Il ouvre l\'application en lecture seule pour le bureau.'
+      }
+      footer={
+        <>
+          <Button variant="ghost" onClick={close}>
+            Annuler
+          </Button>
+          <Button onClick={submit} disabled={busy || !current || !next}>
+            {busy ? 'Enregistrement…' : 'Modifier'}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <Field label="Mot de passe actuel">
+          <PasswordInput
+            value={current}
+            onChange={(e) => {
+              setCurrent(e.target.value)
+              setError('')
+            }}
+            autoComplete="current-password"
+            placeholder="••••••••"
+          />
+        </Field>
+        <Field label="Nouveau mot de passe" error={error || undefined}>
+          <PasswordInput
+            value={next}
+            onChange={(e) => {
+              setNext(e.target.value)
+              setError('')
+            }}
+            autoComplete="new-password"
+            placeholder="Au moins 6 caractères"
+          />
+        </Field>
+        <Field label="Confirmer le nouveau mot de passe">
+          <PasswordInput
+            value={confirm}
+            onChange={(e) => {
+              setConfirm(e.target.value)
+              setError('')
+            }}
+            autoComplete="new-password"
+            placeholder="••••••••"
+          />
+        </Field>
+      </div>
+    </Modal>
   )
 }

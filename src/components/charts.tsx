@@ -21,7 +21,7 @@ function tickLabel(n: number): string {
  * Recettes vs Dépenses per month, diverging about a zero line.
  *
  * Direction is the primary encoding — income above, expense below — so the pair
- * stays readable for a colour-blind reader; the emerald/red pairing only
+ * stays readable for a colour-blind reader; the blue/red pairing only
  * reinforces the app's existing semantics.
  */
 export function IncomeExpenseChart({ data }: { data: MonthlyPoint[] }) {
@@ -81,7 +81,7 @@ export function IncomeExpenseChart({ data }: { data: MonthlyPoint[] }) {
               x2={W - PAD_R}
               y1={mid - half * f}
               y2={mid - half * f}
-              stroke="#e2e8f0"
+              stroke="var(--color-navy-200)"
               strokeWidth={1}
             />
           ))}
@@ -101,7 +101,7 @@ export function IncomeExpenseChart({ data }: { data: MonthlyPoint[] }) {
             x2={W - PAD_R}
             y1={mid}
             y2={mid}
-            stroke="#94a3b8"
+            stroke="var(--color-navy-400)"
             strokeWidth={1.5}
           />
 
@@ -131,7 +131,7 @@ export function IncomeExpenseChart({ data }: { data: MonthlyPoint[] }) {
                       y={PAD_T}
                       width={slot}
                       height={H - PAD_T - PAD_B}
-                      fill="#0f172a"
+                      fill="var(--color-navy-900)"
                       opacity={0.04}
                     />
                   )}

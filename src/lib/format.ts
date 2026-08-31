@@ -1,11 +1,11 @@
-/** Money is stored as whole FCFA integers — no sub-units in XOF. */
+/** Money is stored as whole F CFA integers — no sub-units in XOF. */
 export function formatXOF(amount: number): string {
   const rounded = Math.round(amount || 0)
   const sign = rounded < 0 ? '-' : ''
   const digits = Math.abs(rounded).toString()
-  // Narrow no-break space keeps "50 000 FCFA" from wrapping mid-number.
+  // No-break spaces keep "50 000 F CFA" from wrapping mid-amount.
   const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f')
-  return `${sign}${grouped}\u00a0FCFA`
+  return `${sign}${grouped}\u00a0F\u00a0CFA`
 }
 
 /** Grouped amount with ordinary spaces — for clipboard text, WhatsApp and toasts. */
@@ -20,7 +20,7 @@ export function formatNumber(amount: number): string {
     .replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f')
 }
 
-/** Accepts "50 000", "50.000", "50000 FCFA" -> 50000 */
+/** Accepts "50 000", "50.000", "50000 F CFA" -> 50000 */
 export function parseAmount(raw: string): number {
   const cleaned = String(raw).replace(/[^\d-]/g, '')
   const n = parseInt(cleaned, 10)

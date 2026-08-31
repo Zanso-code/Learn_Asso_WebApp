@@ -1,21 +1,56 @@
+import type { Secret } from './auth'
+
 export type Role = 'treasurer' | 'viewer'
 
 export type PaymentMethod =
   | 'especes'
   | 'orange_money'
-  | 'wave'
   | 'moov_money'
+  | 'wave'
+  | 'telecel_money'
+  | 'sank_money'
+  /** Retired options: no longer offered, but kept so old records keep a label. */
   | 'mtn_momo'
   | 'virement'
 
+/** The methods a treasurer can pick today. */
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'especes', label: 'Espèces' },
   { value: 'orange_money', label: 'Orange Money' },
-  { value: 'wave', label: 'Wave' },
   { value: 'moov_money', label: 'Moov Money' },
-  { value: 'mtn_momo', label: 'MTN MoMo' },
-  { value: 'virement', label: 'Virement bancaire' },
+  { value: 'wave', label: 'Wave' },
+  { value: 'telecel_money', label: 'Télécel Money' },
+  { value: 'sank_money', label: 'Sank Money' },
 ]
+
+/**
+ * Methods withdrawn from the picker. Payments recorded before the change must
+ * still display their real name rather than a blank cell in the statement, the
+ * AG report and the Excel backup.
+ */
+const RETIRED_METHODS: Record<string, string> = {
+  mtn_momo: 'MTN MoMo',
+  virement: 'Virement bancaire',
+}
+
+export function paymentMethodLabel(value: PaymentMethod | string): string {
+  return (
+    PAYMENT_METHODS.find((m) => m.value === value)?.label ?? RETIRED_METHODS[value] ?? String(value)
+  )
+}
+
+/** Reverse lookup for the Excel restore: accepts current and retired labels. */
+export function paymentMethodFromLabel(label: string): PaymentMethod | null {
+  const text = label.trim().toLowerCase()
+  const current = PAYMENT_METHODS.find(
+    (m) => m.label.toLowerCase() === text || m.value === text,
+  )
+  if (current) return current.value
+  const retired = Object.entries(RETIRED_METHODS).find(
+    ([value, name]) => name.toLowerCase() === text || value === text,
+  )
+  return retired ? (retired[0] as PaymentMethod) : null
+}
 
 export type ExpenseCategory =
   | 'logistique'
@@ -46,6 +81,8 @@ export interface Association {
   currency: string
   /** Month (YYYY-MM) from which dues start being counted association-wide. */
   fiscalStart: string
+  /** Optional logo as a compressed data URL — shown in the header and AG report. */
+  logo?: string
 }
 
 export interface Category {
@@ -119,4 +156,73 @@ export interface DB {
   campaigns: Campaign[]
   contributions: Contribution[]
   expenses: Expense[]
+}
+
+/* ------------------------------------------------------ Plateforme (SaaS) */
+
+/**
+ * Subscription state, managed only by the Platform Admin. `essai` behaves like
+ * `actif` — it exists so the console can tell a trial apart from a paying
+ * association at a glance.
+ */
+export type SubscriptionStatus = 'actif' | 'essai' | 'suspendu' | 'expire'
+
+export const SUBSCRIPTION_STATUSES: {
+  value: SubscriptionStatus
+  label: string
+  /** Whether the association may reach the app at all, date permitting. */
+  grantsAccess: boolean
+}[] = [
+  { value: 'actif', label: 'Actif', grantsAccess: true },
+  { value: 'essai', label: 'Essai', grantsAccess: true },
+  { value: 'suspendu', label: 'Suspendu', grantsAccess: false },
+  { value: 'expire', label: 'Expiré', grantsAccess: false },
+]
+
+/**
+ * The tenant record the Platform Admin owns. Ledger data never lives here — it
+ * sits in a separate per-tenant store keyed by `id`, so one association can
+ * never read another's members or accounts.
+ */
+export interface AssociationAccount {
+  id: string
+  nom: string
+  sigle: string
+  ville: string
+  pays: string
+  /** Person to call at the association — the treasurer, usually. */
+  responsable: string
+  dialCode: string
+  telephone: string
+  email: string
+  statut_abonnement: SubscriptionStatus
+  /** YYYY-MM-DD — access is cut off at the end of this day. */
+  date_expiration_acces: string
+  date_creation: string
+  motDePasseCompte: Secret
+  motDePasseTresorier: Secret
+  /** Free-text memo for the Platform Admin (payment reference, etc.). */
+  notes: string
+}
+
+/** Who the association should contact when access is cut off. */
+export interface PlatformContact {
+  nom: string
+  dialCode: string
+  telephone: string
+  email: string
+}
+
+export interface PlatformState {
+  version: number
+  /** null until the Platform Admin password is chosen on first visit to /admin. */
+  admin: Secret | null
+  contact: PlatformContact
+  comptes: AssociationAccount[]
+}
+
+/** The signed-in association, plus the role currently unlocked for it. */
+export interface Session {
+  associationId: string
+  role: Role
 }

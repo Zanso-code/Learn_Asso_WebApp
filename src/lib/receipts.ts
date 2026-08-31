@@ -62,3 +62,12 @@ export async function clearReceipts(): Promise<void> {
     /* ignore */
   }
 }
+
+/**
+ * Delete a specific set of receipts. Multi-tenant safe: `clearReceipts` empties
+ * the object store for *every* association on the device, so anything scoped to
+ * one association must go through here with that association's own keys.
+ */
+export async function deleteReceipts(keys: string[]): Promise<void> {
+  await Promise.all(keys.map((key) => deleteReceipt(key)))
+}

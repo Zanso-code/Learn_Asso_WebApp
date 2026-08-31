@@ -8,14 +8,20 @@
  * The contrast warning obliges visible relief: every category is direct-labelled
  * with its name, amount and share beside its swatch — never colour alone.
  *
- * Recettes vs Dépenses keeps the app's own semantics (emerald income, red
- * expense), which sits in the 6–8 CVD band (deutan ΔE 7.9). That is legal only
- * with secondary encoding, so the monthly chart is *diverging*: income rises
- * above the zero line, expense falls below it. Direction carries the meaning;
- * colour only reinforces it.
+ * Recettes vs Dépenses follows the app accent (ZansoTech blue income, red
+ * expense). Blue/red separates better under deutan and protan CVD than the
+ * emerald/red pair it replaces, so this is a net gain — but the secondary
+ * encoding stays regardless: the monthly chart is *diverging*, income rising
+ * above the zero line and expense falling below it. Direction carries the
+ * meaning; colour only reinforces it.
+ *
+ * INCOME_COLOR is deliberately Zanso Royal Blue rather than CATEGORICAL[0]
+ * (#2a78d6). The two never share a chart — income/expense is the monthly
+ * diverging chart, CATEGORICAL is the expense-category breakdown — but keeping
+ * them visibly distinct avoids a false read when both are on screen together.
  */
 
-export const INCOME_COLOR = '#059669'
+export const INCOME_COLOR = '#0066ff'
 export const EXPENSE_COLOR = '#e34948'
 
 /** Fixed order — assigned by slot, never cycled or re-ranked. */

@@ -1,13 +1,13 @@
 import { MessageCircle, Printer } from 'lucide-react'
 import type { Member } from '@/lib/types'
-import { PAYMENT_METHODS } from '@/lib/types'
+import { paymentMethodLabel } from '@/lib/types'
 import { useDB } from '@/lib/store'
 import { memberBalance, memberStatement } from '@/lib/selectors'
 import { formatDate, formatDateLong, formatXOF, plainXOF, periodLabel, todayISO, waLink } from '@/lib/format'
 import { Badge, Button, Modal } from './ui'
 
 function methodLabel(value: string): string {
-  return PAYMENT_METHODS.find((m) => m.value === value)?.label ?? value
+  return paymentMethodLabel(value)
 }
 
 /** Polite arrears reminder, ready to paste into WhatsApp. */

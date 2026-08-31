@@ -1,13 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import type {
   Association,
   Campaign,
@@ -19,42 +10,21 @@ import type {
   Member,
   Role,
 } from './types'
-import { buildEmpty, buildSeed } from './seed'
+import { buildEmpty } from './seed'
 import { uid } from './format'
-import { clearReceipts, deleteReceipt } from './receipts'
-
-const DB_KEY = 'assocaisse:db:v1'
-const ROLE_KEY = 'assocaisse:role:v1'
-
-function readDB(): DB | null {
-  try {
-    const raw = localStorage.getItem(DB_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as DB
-    if (!parsed || !Array.isArray(parsed.members)) return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-function readRole(): Role {
-  try {
-    return localStorage.getItem(ROLE_KEY) === 'viewer' ? 'viewer' : 'treasurer'
-  } catch {
-    return 'treasurer'
-  }
-}
+import { deleteReceipt, deleteReceipts } from './receipts'
+import { readJSON, tenantKey, writeJSON } from './storage'
+import { usePlatform } from './platform'
 
 interface StoreValue {
   db: DB | null
   role: Role
   isTreasurer: boolean
-  setRole: (role: Role) => void
 
-  loadDemo: () => void
-  createAssociation: (name: string, acronym: string) => void
-  resetAll: () => void
+  /** Wipes this association's ledger back to empty — the account itself stays. */
+  resetLedger: () => void
+  /** Wholesale replacement, used by the Excel restore in Paramètres. */
+  replaceDB: (next: DB) => void
 
   updateAssociation: (patch: Partial<Association>) => void
 
@@ -84,59 +54,67 @@ interface StoreValue {
 
 const StoreContext = createContext<StoreValue | null>(null)
 
+interface Loaded {
+  id: string | null
+  db: DB | null
+}
+
+function loadTenant(id: string | null): Loaded {
+  return { id, db: id ? readJSON<DB>(tenantKey(id)) : null }
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
-  // Hydrated lazily during the first render rather than in an effect: this is a
-  // pure client app, so there is no reason to paint an empty frame first.
-  const [db, setDb] = useState<DB | null>(readDB)
-  const [role, setRoleState] = useState<Role>(readRole)
-  const firstRender = useRef(true)
+  const { session, role, isTreasurer, syncAccountIdentity } = usePlatform()
+  const associationId = session?.associationId ?? null
 
-  // Persist on every mutation. The whole ledger is a few hundred KB of JSON at
-  // realistic association sizes, so a full rewrite is cheaper than diffing.
-  useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false
-      return // nothing changed yet; don't rewrite what we just read
-    }
-    try {
-      if (db) localStorage.setItem(DB_KEY, JSON.stringify(db))
-      else localStorage.removeItem(DB_KEY)
-    } catch (err) {
-      console.error('Sauvegarde impossible (quota localStorage ?)', err)
-    }
-  }, [db])
+  const [loaded, setLoaded] = useState<Loaded>(() => loadTenant(associationId))
 
-  const setRole = useCallback((next: Role) => {
-    setRoleState(next)
-    try {
-      localStorage.setItem(ROLE_KEY, next)
-    } catch {
-      /* private browsing — role simply won't persist */
-    }
-  }, [])
+  // Signing in or out swaps the whole ledger. Adjusting state during render is
+  // the supported way to react to a changed input without painting a frame of
+  // the *previous* tenant's data — which here would be a cross-tenant leak.
+  if (loaded.id !== associationId) setLoaded(loadTenant(associationId))
+  const current = loaded.id === associationId ? loaded : loadTenant(associationId)
 
-  const patch = useCallback((fn: (current: DB) => DB) => {
-    setDb((current) => (current ? fn(current) : current))
+  // Every mutation writes through to this tenant's own key. The whole ledger is
+  // a few hundred KB of JSON at realistic association sizes, so a full rewrite
+  // is cheaper than diffing.
+  const patch = useCallback((fn: (db: DB) => DB) => {
+    setLoaded((prev) => {
+      if (!prev.id || !prev.db) return prev
+      const next = fn(prev.db)
+      writeJSON(tenantKey(prev.id), next)
+      return { ...prev, db: next }
+    })
   }, [])
 
   const value = useMemo<StoreValue>(() => {
-    const isTreasurer = role === 'treasurer'
+    const db = current.db
 
     return {
       db,
       role,
       isTreasurer,
-      setRole,
 
-      loadDemo: () => setDb(buildSeed()),
-      createAssociation: (name, acronym) => setDb(buildEmpty(name, acronym)),
-      resetAll: () => {
-        void clearReceipts()
-        setDb(null)
-      },
+      resetLedger: () =>
+        patch((d) => {
+          const keys = d.expenses.map((e) => e.receiptKey).filter((k): k is string => Boolean(k))
+          if (keys.length) void deleteReceipts(keys)
+          const { name, acronym, city, country } = d.association
+          return buildEmpty(name, acronym, city, country)
+        }),
+
+      replaceDB: (next) => patch(() => next),
 
       updateAssociation: (p) =>
-        patch((d) => ({ ...d, association: { ...d.association, ...p } })),
+        patch((d) => {
+          const association = { ...d.association, ...p }
+          // The Platform Admin console lists associations by name and sigle, so
+          // a rename here has to reach the account record too.
+          if (p.name !== undefined || p.acronym !== undefined) {
+            syncAccountIdentity(association.name, association.acronym)
+          }
+          return { ...d, association }
+        }),
 
       addMember: (m) => {
         const member: Member = { ...m, id: uid('mbr') }
@@ -232,7 +210,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return { ...d, expenses: d.expenses.filter((e) => e.id !== id) }
         }),
     }
-  }, [db, role, setRole, patch])
+  }, [current.db, role, isTreasurer, patch, syncAccountIdentity])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

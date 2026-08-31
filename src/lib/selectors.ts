@@ -1,7 +1,7 @@
 import type { DB, Member, Category, Expense } from './types'
 import { currentPeriod, periodRange, periodOf } from './format'
 
-export type CellStatus = 'paid' | 'partial' | 'unpaid' | 'exempt' | 'before-join'
+export type CellStatus = 'paid' | 'partial' | 'unpaid' | 'exempt' | 'before-join' | 'future'
 
 export interface MonthCell {
   period: string
@@ -40,10 +40,20 @@ export function paidFor(db: DB, memberId: string, period: string): number {
   return sum
 }
 
-export function cellStatus(due: number, paid: number, owed: boolean): CellStatus {
-  if (!owed) return 'before-join'
+/**
+ * `owed` = the month is already due. `future` = it is after the current month
+ * but still within the member's active period, so it may be paid in advance
+ * without ever counting as arrears.
+ */
+export function cellStatus(
+  due: number,
+  paid: number,
+  owed: boolean,
+  future = false,
+): CellStatus {
+  if (!owed && !future) return 'before-join'
   if (due === 0) return 'exempt'
-  if (paid <= 0) return 'unpaid'
+  if (paid <= 0) return future ? 'future' : 'unpaid'
   if (paid + 0.01 < due) return 'partial'
   return 'paid'
 }
@@ -55,13 +65,18 @@ export function memberYearRow(db: DB, member: Member, year: number): MonthCell[]
   const now = currentPeriod()
   return Array.from({ length: 12 }, (_, i) => {
     const period = periodOf(year, i)
-    const owed = member.active && period >= first && period <= now
+    const inScope = member.active && period >= first
+    const owed = inScope && period <= now
+    // Advance payments are allowed, so a later month stays clickable — but it
+    // contributes 0 to `due`, or it would show up as arrears the member does
+    // not actually owe yet.
+    const future = inScope && period > now
     const paid = paidFor(db, member.id, period)
     return {
       period,
       due: owed ? monthly : 0,
       paid,
-      status: cellStatus(monthly, paid, owed),
+      status: cellStatus(monthly, paid, owed, future),
     }
   })
 }

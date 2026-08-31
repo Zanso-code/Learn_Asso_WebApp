@@ -8,7 +8,10 @@
  */
 
 export const MAX_RECEIPT_BYTES = 150 * 1024
+/** Logos sit in localStorage next to the ledger, so they stay much smaller. */
+export const MAX_LOGO_BYTES = 40 * 1024
 const MAX_EDGE = 1024
+const LOGO_EDGE = 256
 const START_QUALITY = 0.7
 const MIN_QUALITY = 0.35
 
@@ -53,7 +56,11 @@ function fit(width: number, height: number, maxEdge: number) {
   }
 }
 
-export async function compressReceipt(file: File): Promise<CompressResult> {
+async function compress(
+  file: File,
+  maxEdge: number,
+  maxBytes: number,
+): Promise<CompressResult> {
   const originalBytes = file.size
   let source: Blob = file
 
@@ -64,7 +71,7 @@ export async function compressReceipt(file: File): Promise<CompressResult> {
       const { default: imageCompression } = await import('browser-image-compression')
       source = await imageCompression(file, {
         maxSizeMB: 0.14,
-        maxWidthOrHeight: MAX_EDGE,
+        maxWidthOrHeight: maxEdge,
         useWebWorker: true,
         fileType: 'image/jpeg',
       })
@@ -74,7 +81,7 @@ export async function compressReceipt(file: File): Promise<CompressResult> {
   }
 
   const img = await loadImage(source)
-  let { width, height } = fit(img.naturalWidth, img.naturalHeight, MAX_EDGE)
+  let { width, height } = fit(img.naturalWidth, img.naturalHeight, maxEdge)
 
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -94,7 +101,7 @@ export async function compressReceipt(file: File): Promise<CompressResult> {
 
     dataUrl = canvas.toDataURL('image/jpeg', quality)
     bytes = dataUrlBytes(dataUrl)
-    if (bytes <= MAX_RECEIPT_BYTES) break
+    if (bytes <= maxBytes) break
 
     if (quality > MIN_QUALITY) {
       quality = Math.max(MIN_QUALITY, quality - 0.1)
@@ -112,4 +119,18 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} o`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} Ko`
   return `${(bytes / (1024 * 1024)).toFixed(1)} Mo`
+}
+
+/** Receipt photo: legible text under 150 KB. */
+export function compressReceipt(file: File): Promise<CompressResult> {
+  return compress(file, MAX_EDGE, MAX_RECEIPT_BYTES)
+}
+
+/**
+ * Association logo. Much smaller than a receipt because it lives in the JSON
+ * ledger in localStorage rather than in IndexedDB, and it is only ever drawn at
+ * a few dozen pixels in the header and on the AG report.
+ */
+export function compressLogo(file: File): Promise<CompressResult> {
+  return compress(file, LOGO_EDGE, MAX_LOGO_BYTES)
 }

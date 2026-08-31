@@ -11,7 +11,7 @@ import {
   Users,
 } from 'lucide-react'
 import type { Campaign, PaymentMethod } from '@/lib/types'
-import { PAYMENT_METHODS } from '@/lib/types'
+import { PAYMENT_METHODS, paymentMethodLabel } from '@/lib/types'
 import { useDB } from '@/lib/store'
 import { useToast } from '@/components/Toast'
 import { campaignRaised } from '@/lib/selectors'
@@ -453,7 +453,7 @@ function CampaignDetail({ campaign, onClose }: { campaign: Campaign; onClose: ()
                     {c.note && <span className="block text-xs text-navy-500">{c.note}</span>}
                   </td>
                   <td className="hidden px-3 py-2 text-xs text-navy-500 sm:table-cell">
-                    {PAYMENT_METHODS.find((m) => m.value === c.method)?.label}
+                    {paymentMethodLabel(c.method)}
                   </td>
                   <td className="tnum px-3 py-2 text-right font-semibold whitespace-nowrap">
                     {formatXOF(c.amount)}

@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -8,7 +9,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { Eye, EyeOff, X } from 'lucide-react'
 import { formatNumber, parseAmount } from '@/lib/format'
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
@@ -21,8 +22,11 @@ type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'
 type Size = 'sm' | 'md' | 'lg'
 
 const VARIANTS: Record<Variant, string> = {
+  // The blue glow under the primary action is the one piece of ZansoTech
+  // §5.2 that carries into the app chrome; the fill itself stays a flat token
+  // so it reads calmly next to dense financial tables.
   primary:
-    'bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:bg-brand-800 disabled:bg-brand-300',
+    'bg-brand-600 text-white shadow-sm shadow-brand-600/30 hover:bg-brand-700 hover:shadow-brand-600/40 active:bg-brand-800 disabled:bg-brand-300 disabled:shadow-none',
   secondary: 'bg-navy-900 text-white shadow-sm hover:bg-navy-800 active:bg-navy-900',
   outline: 'border border-navy-300 bg-white text-navy-800 hover:bg-navy-50 active:bg-navy-100',
   ghost: 'text-navy-600 hover:bg-navy-100 hover:text-navy-900',
@@ -213,7 +217,7 @@ export function AmountInput({
         {...rest}
       />
       <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-sm font-semibold text-navy-400">
-        FCFA
+        F CFA
       </span>
     </div>
   )
@@ -411,6 +415,34 @@ export function Avatar({ name, tone = 'brand' }: { name: string; tone?: Tone }) 
       aria-hidden
     >
       {letters}
+    </div>
+  )
+}
+
+/* --------------------------------------------------------- PasswordInput */
+
+/** Password field with a reveal toggle — essential on phone keyboards. */
+export function PasswordInput({
+  className,
+  ...rest
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <div className="relative">
+      <input
+        type={visible ? 'text' : 'password'}
+        className={cx(CONTROL, 'h-11 pr-11', className)}
+        {...rest}
+      />
+      <button
+        type="button"
+        onClick={() => setVisible((v) => !v)}
+        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-xl text-navy-400 transition hover:text-navy-700"
+        aria-label={visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+        tabIndex={-1}
+      >
+        {visible ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
+      </button>
     </div>
   )
 }

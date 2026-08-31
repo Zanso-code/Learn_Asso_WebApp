@@ -12,7 +12,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import type { Member, PaymentMethod } from '@/lib/types'
-import { PAYMENT_METHODS } from '@/lib/types'
+import { PAYMENT_METHODS, paymentMethodLabel } from '@/lib/types'
 import { useDB } from '@/lib/store'
 import { useToast } from '@/components/Toast'
 import { MemberStatementModal, reminderMessage } from '@/components/MemberStatement'
@@ -54,6 +54,7 @@ const CELL_STYLE: Record<CellStatus, string> = {
   unpaid: 'bg-navy-200 text-navy-500 hover:bg-navy-300',
   exempt: 'bg-violet-100 text-violet-500',
   'before-join': 'bg-navy-50 text-navy-300',
+  future: 'bg-white text-navy-300 ring-1 ring-navy-200 ring-inset hover:bg-navy-50',
 }
 
 const CELL_LABEL: Record<CellStatus, string> = {
@@ -62,6 +63,18 @@ const CELL_LABEL: Record<CellStatus, string> = {
   unpaid: 'Impayé',
   exempt: 'Exempté',
   'before-join': 'Hors période',
+  future: 'À venir',
+}
+
+/** Legend swatch. Explicit, because a future cell is white on white and would
+ *  otherwise be invisible once reduced to its first background class. */
+const CELL_SWATCH: Record<CellStatus, string> = {
+  paid: 'bg-brand-500',
+  partial: 'bg-amber-400',
+  unpaid: 'bg-navy-200',
+  exempt: 'bg-violet-100',
+  'before-join': 'bg-navy-50 ring-1 ring-navy-200 ring-inset',
+  future: 'bg-white ring-1 ring-navy-300 ring-inset',
 }
 
 type Tab = 'matrix' | 'arrears'
@@ -323,9 +336,9 @@ function Matrix({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-navy-100 px-3 py-2.5 text-[11px] font-semibold text-navy-500">
-          {(['paid', 'partial', 'unpaid', 'exempt', 'before-join'] as CellStatus[]).map((s) => (
+          {(['paid', 'partial', 'unpaid', 'future', 'exempt', 'before-join'] as CellStatus[]).map((s) => (
             <span key={s} className="flex items-center gap-1.5">
-              <span className={cx('size-3 rounded-sm', CELL_STYLE[s].split(' ')[0])} />
+              <span className={cx('size-3 rounded-sm', CELL_SWATCH[s])} />
               {CELL_LABEL[s]}
             </span>
           ))}
@@ -402,6 +415,13 @@ function PaymentModal({
       }
     >
       <div className="grid gap-4">
+        {period > currentPeriod() && (
+          <p className="rounded-xl bg-brand-50 px-3.5 py-3 text-xs leading-relaxed text-brand-800">
+            <strong>Paiement anticipé.</strong> Ce mois n'est pas encore échu : le versement est
+            encaissé et apparaîtra comme payé, sans jamais compter dans les impayés.
+          </p>
+        )}
+
         <div className="grid grid-cols-3 gap-2 rounded-xl bg-navy-50 p-3 text-center">
           {[
             ['Dû', formatXOF(monthly), 'text-navy-900'],
@@ -425,7 +445,7 @@ function PaymentModal({
                 <li key={p.id} className="flex items-center gap-3 px-3 py-2 text-sm">
                   <span className="tnum flex-1 font-semibold">{formatXOF(p.amount)}</span>
                   <span className="text-xs text-navy-500">
-                    {PAYMENT_METHODS.find((m) => m.value === p.method)?.label}
+                    {paymentMethodLabel(p.method)}
                   </span>
                   <button
                     onClick={() => {

@@ -456,11 +456,13 @@ function MemberForm({
           error={phoneError}
           hint="Utilisé pour les rappels WhatsApp et les appels directs."
         >
-          <div className="flex gap-2">
+          {/* Stacked on phones: the country name makes the select too wide to
+              sit beside the number on a 390 px screen without squeezing both. */}
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
             <Select
               value={form.dialCode}
               onChange={(e) => setForm({ ...form, dialCode: e.target.value })}
-              className="w-36 shrink-0"
+              className="w-full min-w-0"
               aria-label="Indicatif pays"
             >
               {DIAL_CODES.map(([code, label]) => (
@@ -474,7 +476,7 @@ function MemberForm({
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
               placeholder="70 12 45 89"
               inputMode="tel"
-              className="tnum flex-1"
+              className="tnum w-full min-w-0"
             />
           </div>
         </Field>

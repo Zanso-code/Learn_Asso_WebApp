@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, type ButtonHTMLAttributes } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
   BarChart3,
@@ -7,15 +7,17 @@ import {
   CheckCircle2,
   FileText,
   HandCoins,
-  Play,
+  LogIn,
+  Mail,
   Signal,
-  Smartphone,
   Users,
   Wallet,
 } from 'lucide-react'
-import { useStore } from '@/lib/store'
+import { usePlatform } from '@/lib/platform'
 import { useToast } from '@/components/Toast'
-import { Button, Field, Input, Modal } from '@/components/ui'
+import { passwordProblem } from '@/lib/auth'
+import { Button, Field, Input, Modal, PasswordInput, Select, cx } from '@/components/ui'
+import { LogoPicker } from '@/components/LogoPicker'
 
 const BENEFITS = [
   {
@@ -50,48 +52,81 @@ const BENEFITS = [
   },
 ]
 
+const COUNTRIES = [
+  'Burkina Faso',
+  "Côte d'Ivoire",
+  'Mali',
+  'Sénégal',
+  'Niger',
+  'Togo',
+  'Bénin',
+  'Guinée',
+  'Autre',
+]
+
 export function Landing() {
-  const { db, loadDemo, createAssociation } = useStore()
+  const { session, createAccount } = usePlatform()
   const navigate = useNavigate()
-  const toast = useToast()
   const [createOpen, setCreateOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [acronym, setAcronym] = useState('')
-
-  function handleDemo() {
-    loadDemo()
-    toast.success('Données de démonstration chargées — AAAS')
-    navigate('/app')
-  }
-
-  function handleCreate() {
-    if (!name.trim()) return
-    createAssociation(name.trim(), acronym.trim() || name.trim().slice(0, 6).toUpperCase())
-    toast.success(`Association « ${name.trim()} » créée`)
-    navigate('/app')
-  }
 
   return (
-    <div className="min-h-dvh bg-white">
+    <div className="zt-landing min-h-dvh">
       {/* ------------------------------------------------------------ Header */}
-      <header className="sticky top-0 z-30 border-b border-navy-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2.5">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-brand-600 text-white">
-              <BarChart3 className="size-5" />
+      <header className="sticky top-0 z-30 border-b border-cyan-400/15 bg-[#070d18]/85 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
+            <img
+              src="/brand/zansotech-mark.png"
+              alt=""
+              width={360}
+              height={162}
+              className="zt-logo h-7 w-auto shrink-0 sm:h-8"
+              aria-hidden
+            />
+            <span className="min-w-0 leading-none">
+              <span className="zt-display block truncate text-base font-bold text-white sm:text-lg">
+                AssoCaisse
+              </span>
+              <span className="zt-eyebrow mt-0.5 hidden text-[9px] font-medium text-slate-400 sm:block">
+                par ZansoTech
+              </span>
             </span>
-            <span className="text-lg font-extrabold tracking-tight text-navy-900">AssoCaisse</span>
           </div>
-          <div className="flex items-center gap-2">
-            {db && (
-              <Button variant="ghost" size="sm" onClick={() => navigate('/app')}>
+
+          {/* Labels collapse to icons below sm: at 390 px the full wording
+              pushed the header past the viewport and gave the whole page a
+              horizontal scroll — with three actions there is even less room. */}
+          <div className="flex items-center gap-1 sm:gap-2">
+            <Link
+              to="/contact"
+              aria-label="Nous contacter"
+              className="zt-btn zt-btn-sm zt-btn-ghost"
+            >
+              <Mail className="size-4" />
+              <span className="hidden sm:inline">Contact</span>
+            </Link>
+
+            {session ? (
+              <ZButton size="sm" onClick={() => navigate('/app')}>
                 Reprendre
-              </Button>
+              </ZButton>
+            ) : (
+              <>
+                <ZButton
+                  variant="glass"
+                  size="sm"
+                  aria-label="Se connecter"
+                  onClick={() => navigate('/connexion')}
+                >
+                  <LogIn className="size-4" />
+                  <span className="hidden sm:inline">Se connecter</span>
+                </ZButton>
+                <ZButton size="sm" onClick={() => setCreateOpen(true)}>
+                  <span className="hidden sm:inline">Créer mon association</span>
+                  <span className="sm:hidden">Créer</span>
+                </ZButton>
+              </>
             )}
-            <Button size="sm" onClick={handleDemo}>
-              <Play className="size-4" />
-              Explorer la démo
-            </Button>
           </div>
         </div>
       </header>
@@ -99,47 +134,47 @@ export function Landing() {
       {/* -------------------------------------------------------------- Hero */}
       <section className="relative overflow-hidden">
         <div
-          className="pointer-events-none absolute inset-0 opacity-[0.55]"
+          className="pointer-events-none absolute inset-0"
           style={{
             background:
-              'radial-gradient(60rem 30rem at 15% -10%, #d1fae5 0%, transparent 60%), radial-gradient(50rem 28rem at 100% 0%, #e2e8f0 0%, transparent 55%)',
+              'radial-gradient(60rem 30rem at 15% -10%, rgba(0, 102, 255, 0.30) 0%, transparent 62%), radial-gradient(50rem 28rem at 100% 0%, rgba(0, 212, 255, 0.18) 0%, transparent 58%)',
           }}
           aria-hidden
         />
         <div className="relative mx-auto max-w-6xl px-4 pt-12 pb-14 sm:px-6 sm:pt-20 sm:pb-20">
           <div className="grid items-center gap-12 lg:grid-cols-2">
             <div>
-              <span className="inline-flex items-center gap-2 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-bold text-brand-700">
+              <span className="zt-eyebrow inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/8 px-3 py-1.5 text-[10px] font-semibold text-cyan-300">
                 <Signal className="size-3.5" />
                 Conçu pour les associations d'Afrique de l'Ouest
               </span>
 
-              <h1 className="mt-5 text-3xl leading-[1.1] font-extrabold tracking-tight text-navy-900 sm:text-5xl">
+              <h1 className="zt-display mt-5 text-3xl leading-[1.1] font-bold text-white sm:text-5xl">
                 Arrêtez de gérer vos cotisations dans des fichiers Excel
-                <span className="text-brand-600"> et des groupes WhatsApp.</span>
+                <span className="text-glow"> et des groupes WhatsApp.</span>
               </h1>
 
-              <p className="mt-5 max-w-xl text-base leading-relaxed text-navy-600 sm:text-lg">
+              <p className="mt-5 max-w-xl text-base leading-relaxed text-slate-300 sm:text-lg">
                 Des finances transparentes et un rapport d'Assemblée Générale instantané. Membres,
                 cotisations mensuelles, campagnes extraordinaires et dépenses justifiées — dans une
                 seule application, pensée pour le téléphone.
               </p>
 
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-                <Button size="lg" onClick={handleDemo}>
-                  <Play className="size-5" />
-                  Explorer la démo
-                </Button>
-                <Button size="lg" variant="outline" onClick={() => setCreateOpen(true)}>
+                <ZButton size="lg" onClick={() => setCreateOpen(true)}>
                   Créer mon association
                   <ArrowRight className="size-5" />
-                </Button>
+                </ZButton>
+                <ZButton size="lg" variant="glass" onClick={() => navigate('/connexion')}>
+                  <LogIn className="size-5" />
+                  Se connecter
+                </ZButton>
               </div>
 
-              <ul className="mt-7 flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium text-navy-600">
-                {['Aucune inscription', 'Fonctionne hors-ligne', 'Montants en FCFA'].map((t) => (
+              <ul className="mt-7 flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium text-slate-300">
+                {['30 jours d\'essai', 'Pensé pour le mobile', 'Montants en F CFA'].map((t) => (
                   <li key={t} className="flex items-center gap-1.5">
-                    <CheckCircle2 className="size-4 text-brand-600" />
+                    <CheckCircle2 className="size-4 text-glow" />
                     {t}
                   </li>
                 ))}
@@ -152,109 +187,354 @@ export function Landing() {
       </section>
 
       {/* ---------------------------------------------------------- Benefits */}
-      <section className="border-t border-navy-200 bg-navy-50/60">
+      <section className="border-t border-cyan-400/10">
         <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
-          <h2 className="text-center text-2xl font-extrabold tracking-tight text-navy-900 sm:text-3xl">
+          <h2 className="zt-display text-center text-2xl font-bold text-white sm:text-3xl">
             Tout ce dont un bureau exécutif a besoin
           </h2>
-          <p className="mx-auto mt-3 max-w-2xl text-center text-navy-600">
+          <p className="mx-auto mt-3 max-w-2xl text-center text-slate-400">
             Six outils qui remplacent le cahier de caisse, le tableur partagé et les rappels
             manuels.
           </p>
 
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {BENEFITS.map(({ icon: Icon, title, text }) => (
-              <div
-                key={title}
-                className="rounded-2xl border border-navy-200 bg-white p-5 shadow-sm shadow-navy-900/5"
-              >
-                <span className="flex size-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+              <div key={title} className="zt-glass zt-glass-hover rounded-2xl p-5">
+                <span className="flex size-11 items-center justify-center rounded-xl bg-cyan-400/10 text-glow">
                   <Icon className="size-5.5" />
                 </span>
-                <h3 className="mt-4 font-bold text-navy-900">{title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-navy-600">{text}</p>
+                <h3 className="zt-display mt-4 font-bold text-white">{title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-400">{text}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* --------------------------------------------------------- Demo band */}
+      {/* -------------------------------------------------------------- Roles */}
       <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
-        <div className="overflow-hidden rounded-3xl bg-navy-900 px-6 py-12 text-center sm:px-12">
-          <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-brand-300">
-            <Smartphone className="size-3.5" />
-            Bac à sable — association fictive
-          </span>
-          <h2 className="mt-5 text-2xl font-extrabold tracking-tight text-white sm:text-3xl">
-            Amicale des Anciens &amp; Amis du Sahel
-          </h2>
-          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-navy-300">
-            14 membres, 6 mois de cotisations, 2 campagnes extraordinaires et 8 dépenses déjà
-            saisies. Chargez la démo et testez l'application immédiatement, sans rien configurer.
-          </p>
-          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Button size="lg" onClick={handleDemo}>
-              <Play className="size-5" />
-              Charger les données de démo
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="border-white/25 bg-transparent text-white hover:bg-white/10 active:bg-white/15"
-              onClick={() => setCreateOpen(true)}
-            >
-              Partir d'une base vide
-            </Button>
+        <div className="relative">
+          <div
+            className="pointer-events-none absolute inset-x-8 -inset-y-4 blur-3xl"
+            style={{ background: 'radial-gradient(40rem 12rem at 50% 50%, rgba(0,102,255,0.22), transparent 70%)' }}
+            aria-hidden
+          />
+          <div className="zt-glass relative overflow-hidden rounded-3xl px-6 py-12 text-center sm:px-12">
+            <h2 className="zt-display text-2xl font-bold text-white sm:text-3xl">
+              Deux rôles, deux mots de passe
+            </h2>
+            <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-slate-300">
+              Le bureau consulte les comptes en lecture seule avec le mot de passe du compte. Seul
+              le Trésorier, avec son mot de passe dédié, peut enregistrer un paiement, une dépense
+              ou modifier un membre.
+            </p>
+            <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+              <ZButton size="lg" onClick={() => setCreateOpen(true)}>
+                Créer mon association
+                <ArrowRight className="size-5" />
+              </ZButton>
+            </div>
           </div>
         </div>
       </section>
 
-      <footer className="border-t border-navy-200 py-8">
-        <p className="text-center text-xs text-navy-500">
-          AssoCaisse — gestion d'associations, ONG, amicales et tontines. Montants en FCFA (XOF).
+      <footer className="border-t border-cyan-400/10 py-10">
+        <img
+          src="/brand/zansotech-lockup.png"
+          alt="ZansoTech"
+          width={480}
+          height={320}
+          loading="lazy"
+          className="zt-logo mx-auto h-20 w-auto"
+        />
+        <p className="mt-2 text-center text-xs text-slate-400">
+          AssoCaisse — gestion d'associations, ONG, amicales et tontines. Montants en F CFA (XOF).
+        </p>
+        <p className="mt-3 text-center text-xs text-slate-500">
+          <Link to="/connexion" className="transition hover:text-cyan-300">
+            Espace association
+          </Link>
+          {' · '}
+          <Link to="/contact" className="transition hover:text-cyan-300">
+            Nous contacter
+          </Link>
         </p>
       </footer>
 
-      <Modal
+      <CreateAssociationModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        title="Créer mon association"
-        subtitle="Vous pourrez tout modifier ensuite dans les paramètres."
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setCreateOpen(false)}>
-              Annuler
-            </Button>
-            <Button onClick={handleCreate} disabled={!name.trim()}>
-              Créer
-            </Button>
-          </>
-        }
-      >
-        <div className="grid gap-4">
+        onCreate={async (input) => {
+          // createAccount signs the founder in itself (read-only, as always).
+          const created = await createAccount(input)
+          navigate('/app')
+          return created.nom
+        }}
+      />
+    </div>
+  )
+}
+
+/* --------------------------------------------------------- Creation modal */
+
+interface CreateInput {
+  nom: string
+  sigle: string
+  ville: string
+  pays: string
+  responsable: string
+  dialCode: string
+  telephone: string
+  email: string
+  motDePasseCompte: string
+  motDePasseTresorier: string
+  logo?: string
+}
+
+function CreateAssociationModal({
+  open,
+  onClose,
+  onCreate,
+}: {
+  open: boolean
+  onClose: () => void
+  onCreate: (input: CreateInput) => Promise<string>
+}) {
+  const toast = useToast()
+  const [nom, setNom] = useState('')
+  const [sigle, setSigle] = useState('')
+  const [ville, setVille] = useState('')
+  const [pays, setPays] = useState('Burkina Faso')
+  const [responsable, setResponsable] = useState('')
+  const [dialCode, setDialCode] = useState('226')
+  const [telephone, setTelephone] = useState('')
+  const [email, setEmail] = useState('')
+  const [pwdCompte, setPwdCompte] = useState('')
+  const [pwdCompte2, setPwdCompte2] = useState('')
+  const [pwdTreso, setPwdTreso] = useState('')
+  const [pwdTreso2, setPwdTreso2] = useState('')
+  const [logo, setLogo] = useState<string | undefined>(undefined)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  function validate(): string | null {
+    if (!nom.trim()) return "Le nom de l'association est obligatoire."
+    const problemA = passwordProblem(pwdCompte)
+    if (problemA) return `Mot de passe du compte : ${problemA.toLowerCase()}`
+    if (pwdCompte !== pwdCompte2) return 'Les mots de passe du compte ne correspondent pas.'
+    const problemB = passwordProblem(pwdTreso)
+    if (problemB) return `Mot de passe Trésorier : ${problemB.toLowerCase()}`
+    if (pwdTreso !== pwdTreso2) return 'Les mots de passe Trésorier ne correspondent pas.'
+    if (pwdCompte === pwdTreso) {
+      return 'Le mot de passe Trésorier doit être différent de celui du compte.'
+    }
+    return null
+  }
+
+  async function submit() {
+    const problem = validate()
+    if (problem) return setError(problem)
+    setBusy(true)
+    const name = await onCreate({
+      nom: nom.trim(),
+      sigle: sigle.trim() || nom.trim().slice(0, 6).toUpperCase(),
+      ville: ville.trim(),
+      pays,
+      responsable: responsable.trim(),
+      dialCode,
+      telephone: telephone.trim(),
+      email: email.trim(),
+      motDePasseCompte: pwdCompte,
+      motDePasseTresorier: pwdTreso,
+      logo,
+    })
+    setBusy(false)
+    toast.success(`Association « ${name} » créée — essai de 30 jours`)
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Créer mon association"
+      subtitle="Essai gratuit de 30 jours. Tout est modifiable ensuite dans les paramètres."
+      wide
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Annuler
+          </Button>
+          <Button onClick={submit} disabled={busy}>
+            {busy ? 'Création…' : "Créer l'association"}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Nom de l'association" required>
             <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Association des Anciens du Lycée 2012"
+              value={nom}
+              onChange={(e) => {
+                setNom(e.target.value)
+                setError('')
+              }}
+              placeholder="Amicale des Anciens du Lycée 2012"
               autoFocus
             />
           </Field>
           <Field label="Sigle" hint="Affiché dans l'en-tête et sur le rapport d'AG.">
+            <Input value={sigle} onChange={(e) => setSigle(e.target.value)} placeholder="AAL 2012" />
+          </Field>
+        </div>
+
+        <Field label="Logo de l'association" hint="Apparaît dans l'en-tête et sur le rapport d'AG.">
+          <LogoPicker value={logo} onChange={setLogo} />
+        </Field>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Ville">
+            <Input value={ville} onChange={(e) => setVille(e.target.value)} placeholder="Ouagadougou" />
+          </Field>
+          <Field label="Pays">
+            <Select value={pays} onChange={(e) => setPays(e.target.value)}>
+              {COUNTRIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Responsable" hint="Personne à contacter pour l'abonnement.">
             <Input
-              value={acronym}
-              onChange={(e) => setAcronym(e.target.value)}
-              placeholder="AAL 2012"
+              value={responsable}
+              onChange={(e) => setResponsable(e.target.value)}
+              placeholder="Salif Compaoré"
             />
           </Field>
-          <p className="rounded-xl bg-navy-50 px-4 py-3 text-xs leading-relaxed text-navy-600">
-            Quatre catégories de cotisation par défaut sont créées (Standard, Cadre / Soutien,
-            Étudiant, Membre d'Honneur). Les données restent sur cet appareil.
-          </p>
+          <Field label="Adresse e-mail">
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="tresorier@exemple.bf"
+            />
+          </Field>
         </div>
-      </Modal>
-    </div>
+
+        <div className="grid grid-cols-[6rem_1fr] gap-3">
+          <Field label="Indicatif">
+            <Input
+              value={dialCode}
+              onChange={(e) => setDialCode(e.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+            />
+          </Field>
+          <Field label="Téléphone / WhatsApp">
+            <Input
+              value={telephone}
+              onChange={(e) => setTelephone(e.target.value)}
+              inputMode="tel"
+              placeholder="70 12 45 89"
+            />
+          </Field>
+        </div>
+
+        <div className="rounded-2xl border border-navy-200 bg-navy-50/60 p-4">
+          <p className="text-sm font-bold text-navy-900">Mot de passe du compte</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-navy-600">
+            Partagé avec le bureau (Président, Secrétaire). Il ouvre l'application en lecture seule.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <PasswordInput
+              value={pwdCompte}
+              onChange={(e) => {
+                setPwdCompte(e.target.value)
+                setError('')
+              }}
+              placeholder="Mot de passe"
+              autoComplete="new-password"
+            />
+            <PasswordInput
+              value={pwdCompte2}
+              onChange={(e) => {
+                setPwdCompte2(e.target.value)
+                setError('')
+              }}
+              placeholder="Confirmer"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-brand-200 bg-brand-50/60 p-4">
+          <p className="text-sm font-bold text-navy-900">Mot de passe Trésorier</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-navy-600">
+            Connu du seul Trésorier. Il débloque l'enregistrement des paiements, des dépenses et la
+            modification des membres. Il doit être différent du mot de passe du compte.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <PasswordInput
+              value={pwdTreso}
+              onChange={(e) => {
+                setPwdTreso(e.target.value)
+                setError('')
+              }}
+              placeholder="Mot de passe"
+              autoComplete="new-password"
+            />
+            <PasswordInput
+              value={pwdTreso2}
+              onChange={(e) => {
+                setPwdTreso2(e.target.value)
+                setError('')
+              }}
+              placeholder="Confirmer"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+
+        {error && (
+          <p className="rounded-xl bg-red-50 px-3.5 py-3 text-sm font-medium text-red-700">
+            {error}
+          </p>
+        )}
+
+        <p className="rounded-xl bg-navy-50 px-4 py-3 text-xs leading-relaxed text-navy-600">
+          Quatre catégories de cotisation par défaut sont créées (Standard, Cadre / Soutien,
+          Étudiant, Membre d'Honneur). Les données restent sur cet appareil : pensez à exporter une
+          sauvegarde Excel régulièrement.
+        </p>
+      </div>
+    </Modal>
+  )
+}
+
+/* ------------------------------------------------------ Landing-only button
+
+   The shared <Button> is built for the app's light surfaces. This page is the
+   one dark canvas in the product, so it carries its own gradient/glass/ghost
+   hierarchy (§5.2) rather than bending the shared component to two themes. */
+
+function ZButton({
+  variant = 'primary',
+  size = 'md',
+  className,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: 'primary' | 'glass' | 'ghost'
+  size?: 'sm' | 'md' | 'lg'
+}) {
+  const sizes = { sm: 'zt-btn-sm', md: 'h-11 px-4 text-sm', lg: 'zt-btn-lg' }
+  return (
+    <button
+      className={cx('zt-btn', `zt-btn-${variant}`, sizes[size], className)}
+      {...rest}
+    />
   )
 }
 
@@ -262,33 +542,40 @@ export function Landing() {
 function HeroPreview() {
   return (
     <div className="relative">
-      <div className="rounded-3xl border border-navy-200 bg-white p-4 shadow-2xl shadow-navy-900/10 sm:p-5">
+      <div
+        className="pointer-events-none absolute -inset-6 blur-3xl"
+        style={{ background: 'radial-gradient(24rem 16rem at 60% 40%, rgba(0,163,255,0.22), transparent 70%)' }}
+        aria-hidden
+      />
+      <div className="zt-glass relative rounded-3xl p-4 shadow-2xl shadow-black/40 sm:p-5">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-navy-500">Trésorerie actuelle</p>
-            <p className="tnum mt-0.5 text-3xl font-extrabold text-navy-900">
-              1 284 500<span className="ml-1 text-base font-bold text-navy-400">FCFA</span>
+            <p className="text-xs font-semibold text-slate-400">Trésorerie actuelle</p>
+            <p className="tnum zt-display mt-0.5 text-3xl font-bold text-white">
+              1 284 500<span className="ml-1 text-base font-bold text-slate-400">F CFA</span>
             </p>
           </div>
-          <span className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-bold text-brand-700">
+          <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1 text-xs font-bold text-cyan-300">
             À jour
           </span>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3">
           {[
-            ['Recettes', '2 145 000', 'text-brand-700'],
-            ['Dépenses', '860 500', 'text-red-600'],
+            ['Recettes', '2 145 000', 'text-cyan-300'],
+            ['Dépenses', '860 500', 'text-red-400'],
           ].map(([label, value, tone]) => (
-            <div key={label} className="rounded-xl border border-navy-200 bg-navy-50/60 p-3">
-              <p className="text-[11px] font-semibold text-navy-500">{label}</p>
-              <p className={`tnum mt-0.5 text-sm font-extrabold ${tone}`}>{value} FCFA</p>
+            <div key={label} className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-[11px] font-semibold text-slate-400">{label}</p>
+              <p className={`tnum mt-0.5 text-sm font-extrabold ${tone}`}>{value} F CFA</p>
             </div>
           ))}
         </div>
 
-        <div className="mt-4 rounded-xl border border-navy-200 p-3">
-          <p className="mb-2.5 text-[11px] font-bold text-navy-500">COTISATIONS 2026</p>
+        <div className="mt-4 rounded-xl border border-white/10 p-3">
+          <p className="zt-eyebrow mb-2.5 text-[10px] font-semibold text-slate-400">
+            Cotisations 2026
+          </p>
           <div className="space-y-2">
             {[
               ['Amadou Diallo', [1, 1, 1, 1, 1, 1, 1, 2, 0]],
@@ -297,7 +584,7 @@ function HeroPreview() {
               ['Cheikh Ndiaye', [1, 1, 0, 1, 1, 1, 1, 1, 0]],
             ].map(([name, cells]) => (
               <div key={name as string} className="flex items-center gap-2">
-                <span className="w-24 shrink-0 truncate text-[11px] font-semibold text-navy-700 sm:w-28">
+                <span className="w-24 shrink-0 truncate text-[11px] font-semibold text-slate-300 sm:w-28">
                   {name as string}
                 </span>
                 <div className="flex flex-1 gap-1">
@@ -305,7 +592,11 @@ function HeroPreview() {
                     <span
                       key={i}
                       className={`h-5 flex-1 rounded ${
-                        state === 1 ? 'bg-brand-500' : state === 2 ? 'bg-amber-400' : 'bg-navy-200'
+                        state === 1
+                          ? 'bg-gradient-to-br from-glow to-brand-600'
+                          : state === 2
+                            ? 'bg-amber-400'
+                            : 'bg-white/10'
                       }`}
                     />
                   ))}
@@ -313,11 +604,11 @@ function HeroPreview() {
               </div>
             ))}
           </div>
-          <div className="mt-3 flex gap-3 text-[10px] font-semibold text-navy-500">
+          <div className="mt-3 flex gap-3 text-[10px] font-semibold text-slate-400">
             {[
-              ['bg-brand-500', 'Payé'],
+              ['bg-gradient-to-br from-glow to-brand-600', 'Payé'],
               ['bg-amber-400', 'Partiel'],
-              ['bg-navy-200', 'Impayé'],
+              ['bg-white/10', 'Impayé'],
             ].map(([c, l]) => (
               <span key={l} className="flex items-center gap-1">
                 <span className={`size-2.5 rounded-sm ${c}`} />
