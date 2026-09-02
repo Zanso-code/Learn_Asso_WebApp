@@ -37,7 +37,22 @@ le projet Supabase branché.
    association pouvait lire le mémo que l'Admin Plateforme avait écrit à son
    sujet, alors que la console l'annonce « visible ici seulement ».
 
-   Les trois sont rejouables sans dommage, dans cet ordre.
+   **d.** [`supabase/migrations/0004_reparation_droits.sql`](supabase/migrations/0004_reparation_droits.sql)
+   — accorde `EXECUTE` sur les prédicats appelés par les politiques RLS
+   (`can_write`, `has_active_access`, `may_write_ledger`…). Une politique
+   s'évalue avec les droits de **l'appelant** : sans ce privilège, `using
+   (may_write_ledger(...))` ne rend pas « faux », il lève `permission denied for
+   function` — et plus personne n'écrit, ni le Trésorier dans le grand livre, ni
+   l'Admin Plateforme dans une fiche. Le correctif est intégré à `0002` pour
+   toute nouvelle installation ; ce fichier existe pour les bases déjà en
+   service, où `0002` ne peut plus être rejoué. Il commence par un bloc de
+   diagnostic à exécuter seul (l'éditeur SQL n'affiche que le dernier résultat
+   d'un lot).
+
+   **`0002` ne doit jamais être rejoué seul après `0003`** : il lit
+   `associations.tresorier_secret` et `associations.notes`, deux colonnes que
+   les migrations suivantes suppriment. `0001`, `0003` et `0004` sont, eux,
+   rejouables sans dommage.
 
    Après application, ces deux requêtes doivent confirmer l'état attendu :
 

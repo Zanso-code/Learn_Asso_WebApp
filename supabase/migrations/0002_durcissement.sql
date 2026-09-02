@@ -141,6 +141,30 @@ language sql stable set search_path = public, pg_temp as $$
      and has_active_access()
 $$;
 
+-- EXECUTE explicite sur les predicats ci-dessus.
+--
+-- Une politique RLS s'evalue avec les droits de l'APPELANT, pas de celui qui
+-- possede la table : sans ce privilege, `using (may_write_ledger(...))` ne rend
+-- pas « faux », il leve `permission denied for function` (42501) — et le grand
+-- livre entier devient inecrivable. S'en remettre au `EXECUTE to PUBLIC` par
+-- defaut de Postgres ne suffit pas : ce defaut peut avoir ete retire du projet,
+-- auquel cas seules les fonctions creees AVANT ce retrait restent appelables.
+--
+-- `revoke ... from public, anon` d'abord : aucune politique n'est ecrite
+-- `to anon`, et aucun de ces predicats n'a de sens hors session.
+
+revoke all on function current_association_id() from public, anon;
+revoke all on function is_platform_admin()      from public, anon;
+revoke all on function can_write()              from public, anon;
+revoke all on function has_active_access()      from public, anon;
+revoke all on function may_write_ledger(uuid)   from public, anon;
+
+grant execute on function current_association_id() to authenticated;
+grant execute on function is_platform_admin()      to authenticated;
+grant execute on function can_write()              to authenticated;
+grant execute on function has_active_access()      to authenticated;
+grant execute on function may_write_ledger(uuid)   to authenticated;
+
 -- =============================================================================
 -- 5. Designation du Tresorier
 --

@@ -137,15 +137,62 @@ function rowToContact(row: Record<string, unknown> | null): PlatformContact {
   }
 }
 
+/** Ce que `authMessage` sait lire : une erreur Supabase, ou son seul message. */
+interface SupabaseErrorLike {
+  message: string
+  /** SQLSTATE Postgres (`42501`…) ou code PostgREST (`PGRST202`…), selon la couche. */
+  code?: string
+  details?: string | null
+  hint?: string | null
+}
+
+const DROITS_MESSAGE = "Vous n'avez pas les droits nécessaires pour cette opération."
+const SCHEMA_MESSAGE =
+  "Base de données non à jour : une migration SQL n'a pas été appliquée. Contactez le support."
+const GENERIC_MESSAGE =
+  'Opération impossible pour le moment. Réessayez, puis contactez le support si cela persiste.'
+
 /**
  * Messages Supabase traduits — l'utilisateur ne lit pas l'anglais.
  *
- * Le repli ne renvoie plus le message brut du serveur : il remontait jusque
- * dans les toasts des noms de tables, de contraintes et de politiques RLS. Le
- * detail technique part en console, ou il sert au diagnostic.
+ * Le toast ne montre plus le message brut du serveur : il y remontait des noms
+ * de tables, de contraintes et de politiques RLS. Mais le brut ne doit pas
+ * disparaitre pour autant — il est journalise SYSTEMATIQUEMENT, y compris pour
+ * les cas traduits. C'est ce qui manquait : un « droits insuffisants » ne disait
+ * pas quelle table refusait, et les deux causes possibles (privilege de colonne
+ * sur `associations`, RLS sur `association_notes`) etaient indiscernables.
+ *
+ * Le SQLSTATE prime sur le texte quand PostgREST le fournit ; GoTrue, lui,
+ * n'envoie pas de code, d'ou le repli par sous-chaines.
  */
-function authMessage(raw: string): string {
-  const text = raw.toLowerCase()
+function authMessage(error: SupabaseErrorLike | string): string {
+  const raw = typeof error === 'string' ? { message: error } : error
+  console.error('Supabase :', {
+    message: raw.message,
+    code: raw.code,
+    details: raw.details,
+    hint: raw.hint,
+  })
+
+  // --- SQLSTATE / code PostgREST : la source la plus sure quand elle existe.
+  switch (raw.code) {
+    // Privilege de table ou de colonne refuse, RLS refusee, ou garde
+    // `is_platform_admin()` de admin_set_subscription — dont le message est en
+    // francais et echappait donc a la reconnaissance par sous-chaine.
+    case '42501':
+      return DROITS_MESSAGE
+    // Colonne, table ou fonction absente : une migration n'a pas ete jouee.
+    case '42703':
+    case '42P01':
+    case '42883':
+    case 'PGRST202':
+    case 'PGRST204':
+      return SCHEMA_MESSAGE
+    case '23514':
+      return 'Une des valeurs saisies dépasse la taille autorisée.'
+  }
+
+  const text = raw.message.toLowerCase()
   if (text.includes('invalid login credentials')) return 'E-mail ou mot de passe incorrect.'
   if (text.includes('already registered') || text.includes('already been registered')) {
     return 'Cet e-mail est déjà utilisé par une autre association.'
@@ -158,13 +205,13 @@ function authMessage(raw: string): string {
     return 'Connexion au serveur impossible. Vérifiez votre réseau.'
   }
   if (text.includes('permission denied') || text.includes('row-level security')) {
-    return "Vous n'avez pas les droits nécessaires pour cette opération."
+    return DROITS_MESSAGE
   }
   if (text.includes('violates check constraint')) {
     return 'Une des valeurs saisies dépasse la taille autorisée.'
   }
-  console.error('Erreur serveur non traduite :', raw)
-  return "Opération impossible pour le moment. Réessayez, puis contactez le support si cela persiste."
+  if (text.includes('does not exist') || text.includes('schema cache')) return SCHEMA_MESSAGE
+  return GENERIC_MESSAGE
 }
 
 function readStoredSession(): StoredSession | null {
@@ -342,34 +389,40 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  /**
+   * Enregistre une fiche depuis la console.
+   *
+   * Deux chemins d'ecriture distincts, et cet ordre precis :
+   *
+   *   1. L'ABONNEMENT d'abord, par `admin_set_subscription`. C'est l'operation
+   *      critique — une association bloquee qui a paye attend son acces. Elle
+   *      passait auparavant en second, derriere l'identite : le moindre refus
+   *      sur `responsable`/`telephone` la faisait sauter en silence, l'admin
+   *      voyant une erreur de droits sans savoir que le renouvellement n'avait
+   *      meme pas ete tente.
+   *   2. L'IDENTITE ensuite, par UPDATE direct — le seul chemin que les
+   *      privileges de colonnes autorisent pour ces champs-la.
+   *
+   * Et surtout : on n'envoie QUE ce qui a change. Le modal transmet toujours
+   * l'integralite de ses champs, y compris ceux auxquels l'admin n'a pas
+   * touche ; sans ce filtrage, prolonger un abonnement declenchait une ecriture
+   * inutile sur `associations` et ecrasait la note interne par une chaine vide.
+   */
   const updateAccount = useCallback(async (id: string, patch: Partial<AssociationAccount>) => {
-    // --- 1. Identité : UPDATE direct, couvert par les privilèges de colonnes.
-    const row: Record<string, unknown> = {}
-    if (patch.nom !== undefined) row.nom = patch.nom
-    if (patch.sigle !== undefined) row.sigle = patch.sigle
-    if (patch.ville !== undefined) row.ville = patch.ville
-    if (patch.pays !== undefined) row.pays = patch.pays
-    if (patch.responsable !== undefined) row.responsable = patch.responsable
-    if (patch.dialCode !== undefined) row.dial_code = patch.dialCode
-    if (patch.telephone !== undefined) row.telephone = patch.telephone
-    if (patch.email !== undefined) row.email = patch.email
+    const current = comptesRef.current.find((c) => c.id === id)
 
-    if (Object.keys(row).length) {
-      const { error } = await supabase.from('associations').update(row).eq('id', id)
-      if (error) throw new Error(authMessage(error.message))
-    }
+    /** Vrai quand le champ est present dans le patch ET reellement different. */
+    const changed = <K extends keyof AssociationAccount>(key: K): boolean =>
+      patch[key] !== undefined && (!current || patch[key] !== current[key])
 
-    // --- 2. Abonnement : les colonnes qui portent le paywall ne sont accordées
+    // --- 1. Abonnement : les colonnes qui portent le paywall ne sont accordées
     // à personne. Cette fonction `security definer` est le seul chemin, et elle
     // vérifie elle-même que l'appelant est bien l'Admin Plateforme. Les élargir
     // par un GRANT offrirait à chaque association un abonnement illimité.
     const touchesSubscription =
-      patch.statut_abonnement !== undefined ||
-      patch.date_expiration_acces !== undefined ||
-      patch.notes !== undefined
+      changed('statut_abonnement') || changed('date_expiration_acces') || changed('notes')
 
     if (touchesSubscription) {
-      const current = comptesRef.current.find((c) => c.id === id)
       // Une chaîne vide n'est pas une date : Postgres refuserait le cast. Mieux
       // vaut refuser ici, avec un message lisible.
       const expiry = patch.date_expiration_acces ?? current?.date_expiration_acces ?? ''
@@ -379,9 +432,36 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         target_id: id,
         new_statut: patch.statut_abonnement ?? current?.statut_abonnement ?? 'essai',
         new_expiry: expiry,
-        new_notes: patch.notes ?? null,
+        // `null` = « ne touche pas à la note ». N'envoyer la note que si elle a
+        // changé évite de l'effacer à chaque simple prolongation.
+        new_notes: changed('notes') ? (patch.notes ?? '') : null,
       })
-      if (error) throw new Error(authMessage(error.message))
+      if (error) throw new Error(authMessage(error))
+    }
+
+    // --- 2. Identité : UPDATE direct, couvert par les privilèges de colonnes.
+    const row: Record<string, unknown> = {}
+    if (changed('nom')) row.nom = patch.nom
+    if (changed('sigle')) row.sigle = patch.sigle
+    if (changed('ville')) row.ville = patch.ville
+    if (changed('pays')) row.pays = patch.pays
+    if (changed('responsable')) row.responsable = patch.responsable
+    if (changed('dialCode')) row.dial_code = patch.dialCode
+    if (changed('telephone')) row.telephone = patch.telephone
+    if (changed('email')) row.email = patch.email
+
+    if (Object.keys(row).length) {
+      const { error } = await supabase.from('associations').update(row).eq('id', id)
+      if (error) {
+        // L'abonnement, lui, est déjà passé : le dire, sinon l'admin refait
+        // l'opération en croyant que rien n'a été enregistré.
+        const detail = authMessage(error)
+        throw new Error(
+          touchesSubscription
+            ? `Abonnement enregistré, mais les coordonnées n'ont pas pu être modifiées. ${detail}`
+            : detail,
+        )
+      }
     }
 
     setComptes((list) => list.map((c) => (c.id === id ? { ...c, ...patch } : c)))
@@ -393,7 +473,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     // Les utilisateurs Supabase Auth survivent : les supprimer exige la clé de
     // service, qui n'a rien à faire dans un navigateur.
     const { error } = await supabase.rpc('admin_delete_association', { target_id: id })
-    if (error) throw new Error(authMessage(error.message))
+    if (error) throw new Error(authMessage(error))
     await clearLedger(id).catch(() => {})
     await clearFor(id).catch(() => {})
     setComptes((list) => list.filter((c) => c.id !== id))
@@ -412,7 +492,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         email: next.email,
       })
       .eq('id', true)
-    if (error) throw new Error(authMessage(error.message))
+    if (error) throw new Error(authMessage(error))
   }, [])
 
   /* ------------------------------------------------------------ démarrage */
@@ -524,7 +604,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           const { error } = await supabase.rpc('set_treasurer_identity', {
             treasurer_uid: signIn.user.id,
           })
-          if (error) return authMessage(error.message)
+          if (error) return authMessage(error)
         }
         return null
       }
@@ -544,7 +624,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         password,
       })
       if (signUpError || !signUp.user) {
-        return authMessage(signUpError?.message ?? 'Création du rôle Trésorier impossible')
+        return authMessage(signUpError ?? 'Création du rôle Trésorier impossible')
       }
       if (!signUp.session) {
         return "Le compte Trésorier attend une confirmation par e-mail. Désactivez « Confirm email » dans Supabase (Authentication → Providers → Email)."
@@ -553,7 +633,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       const { error: linkError } = await supabase.rpc('set_treasurer_identity', {
         treasurer_uid: signUp.user.id,
       })
-      if (linkError) return authMessage(linkError.message)
+      if (linkError) return authMessage(linkError)
 
       return null
     }
@@ -576,7 +656,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           password: input.motDePasseCompte,
         })
         if (signUpError || !signUp.user) {
-          throw new Error(authMessage(signUpError?.message ?? 'Inscription impossible'))
+          throw new Error(authMessage(signUpError ?? 'Inscription impossible'))
         }
 
         const { data: row, error } = await supabase
@@ -600,7 +680,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           .select(ACCOUNT_COLUMNS)
           .single()
 
-        if (error || !row) throw new Error(authMessage(error?.message ?? 'Création impossible'))
+        if (error || !row) throw new Error(authMessage(error ?? 'Création impossible'))
 
         const associationId = String((row as Record<string, unknown>).id)
 
@@ -611,7 +691,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         const { error: secretError } = await supabase
           .from('treasurer_secrets')
           .insert({ association_id: associationId, secret: tresorier })
-        if (secretError) throw new Error(authMessage(secretError.message))
+        if (secretError) throw new Error(authMessage(secretError))
 
         // Identité Trésorier : le compte qui portera toutes les écritures.
         const email = treasurerEmail(input.email)
@@ -620,7 +700,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           password: input.motDePasseTresorier,
         })
         if (tresoError || !tresoSignUp.user) {
-          throw new Error(authMessage(tresoError?.message ?? 'Création du rôle Trésorier impossible'))
+          throw new Error(authMessage(tresoError ?? 'Création du rôle Trésorier impossible'))
         }
         if (!tresoSignUp.session) {
           throw new Error(
@@ -631,7 +711,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         const { error: linkError } = await supabase.rpc('set_treasurer_identity', {
           treasurer_uid: tresoSignUp.user.id,
         })
-        if (linkError) throw new Error(authMessage(linkError.message))
+        if (linkError) throw new Error(authMessage(linkError))
 
         // Catégories de départ. Elles passent par le client Trésorier : depuis
         // la migration 0002, la RLS refuse toute écriture au compte du bureau.
@@ -639,7 +719,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         const { error: catError } = await supabaseTresorier
           .from('categories')
           .insert(categories.map((c) => toRow('categories', c, associationId)))
-        if (catError) throw new Error(authMessage(catError.message))
+        if (catError) throw new Error(authMessage(catError))
 
         const created = rowToAccount(row as Record<string, unknown>, tresorier)
         cacheAccount(created)
@@ -655,7 +735,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           email: email.trim(),
           password,
         })
-        if (error) return authMessage(error.message)
+        if (error) return authMessage(error)
 
         const fresh = await fetchOwnAccount()
         if (!fresh) {
@@ -774,7 +854,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           .from('treasurer_secrets')
           .update({ secret: hashed })
           .eq('association_id', target.id)
-        if (secretError) return authMessage(secretError.message)
+        if (secretError) return authMessage(secretError)
 
         const { error } = await supabaseTresorier.auth.updateUser({ password: next })
         if (error) {
@@ -782,7 +862,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
             .from('treasurer_secrets')
             .update({ secret: target.secretTresorier })
             .eq('association_id', target.id)
-          return authMessage(error.message)
+          return authMessage(error)
         }
 
         cacheAccount({ ...target, secretTresorier: hashed })
@@ -805,7 +885,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         if (check) return 'Mot de passe du compte actuel incorrect.'
 
         const { error } = await supabase.auth.updateUser({ password: next })
-        if (error) return authMessage(error.message)
+        if (error) return authMessage(error)
         return null
       },
 
@@ -816,7 +896,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           email: email.trim(),
           password,
         })
-        if (error) return authMessage(error.message)
+        if (error) return authMessage(error)
 
         const { data } = await supabase.from('platform_admins').select('user_id').maybeSingle()
         if (!data) {
@@ -849,7 +929,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         if (check) return 'Mot de passe administrateur actuel incorrect.'
 
         const { error } = await supabase.auth.updateUser({ password: next })
-        return error ? authMessage(error.message) : null
+        return error ? authMessage(error) : null
       },
 
       refreshComptes,
