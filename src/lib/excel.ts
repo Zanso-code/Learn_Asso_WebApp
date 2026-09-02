@@ -14,7 +14,7 @@
 import type { DB, DuePayment, Expense, Member } from './types'
 import { EXPENSE_CATEGORIES, paymentMethodFromLabel, paymentMethodLabel } from './types'
 import type { ExpenseCategory, PaymentMethod } from './types'
-import { formatDate, todayISO } from './format'
+import { formatDate, todayISO, uid } from './format'
 
 type Cell = string | number | Date | null
 type Row = Cell[]
@@ -219,6 +219,9 @@ export async function exportWorkbook(db: DB): Promise<void> {
 
 export class ExcelImportError extends Error {}
 
+/** Forme exacte des clés produites par `uid('rcpt')` — voir src/lib/format.ts. */
+const RECEIPT_KEY = /^rcpt_[0-9a-f-]{36}$/
+
 type SheetRows = unknown[][]
 
 function requireSheet(map: Map<string, SheetRows>, name: string): SheetRows {
@@ -264,7 +267,7 @@ export async function importWorkbook(file: File, fallback: DB): Promise<DB> {
   const categories: DB['categories'] = requireSheet(map, SHEETS.categories)
     .filter((r) => text(r[0]) || text(r[1]))
     .map((r) => ({
-      id: text(r[0]) || `cat_${Math.random().toString(36).slice(2, 8)}`,
+      id: text(r[0]) || uid('cat'),
       name: text(r[1]),
       monthlyAmount: num(r[2]),
       color: text(r[3]) || 'navy',
@@ -284,7 +287,7 @@ export async function importWorkbook(file: File, fallback: DB): Promise<DB> {
     .map((r) => {
       const categoryId = text(r[4])
       return {
-        id: text(r[0]) || `mbr_${Math.random().toString(36).slice(2, 8)}`,
+        id: text(r[0]) || uid('mbr'),
         fullName: text(r[1]),
         dialCode: text(r[2]) || '226',
         phone: text(r[3]),
@@ -302,7 +305,7 @@ export async function importWorkbook(file: File, fallback: DB): Promise<DB> {
   const duePayments: DuePayment[] = requireSheet(map, SHEETS.dues)
     .filter((r) => validMember.has(text(r[1])) && parsePeriod(r[3]))
     .map((r) => ({
-      id: text(r[0]) || `due_${Math.random().toString(36).slice(2, 8)}`,
+      id: text(r[0]) || uid('due'),
       memberId: text(r[1]),
       period: parsePeriod(r[3]),
       amount: num(r[4]),
@@ -314,7 +317,7 @@ export async function importWorkbook(file: File, fallback: DB): Promise<DB> {
   const campaigns: DB['campaigns'] = requireSheet(map, SHEETS.campaigns)
     .filter((r) => text(r[1]))
     .map((r) => ({
-      id: text(r[0]) || `cmp_${Math.random().toString(36).slice(2, 8)}`,
+      id: text(r[0]) || uid('cmp'),
       title: text(r[1]),
       description: text(r[2]),
       targetAmount: num(r[3]),
@@ -330,7 +333,7 @@ export async function importWorkbook(file: File, fallback: DB): Promise<DB> {
       const memberId = text(r[3])
       const linked = validMember.has(memberId)
       return {
-        id: text(r[0]) || `ctr_${Math.random().toString(36).slice(2, 8)}`,
+        id: text(r[0]) || uid('ctr'),
         campaignId: text(r[1]),
         memberId: linked ? memberId : null,
         // An unlinked row keeps its name so the money stays attributable.
@@ -345,13 +348,16 @@ export async function importWorkbook(file: File, fallback: DB): Promise<DB> {
   const expenses: Expense[] = requireSheet(map, SHEETS.expenses)
     .filter((r) => text(r[1]))
     .map((r) => ({
-      id: text(r[0]) || `exp_${Math.random().toString(36).slice(2, 8)}`,
+      id: text(r[0]) || uid('exp'),
       label: text(r[1]),
       beneficiary: text(r[2]),
       amount: num(r[3]),
       category: categoryValue(r[4]),
       date: parseDate(r[5]) || todayISO(),
-      receiptKey: text(r[6]) || undefined,
+      // Une cle de justificatif est produite par uid('rcpt') : un UUID prefixe.
+      // Tout le reste vient d'un classeur que l'utilisateur a pu editer a la
+      // main, et n'a rien a faire dans un chemin de Supabase Storage.
+      receiptKey: RECEIPT_KEY.test(text(r[6])) ? text(r[6]) : undefined,
       note: text(r[7]),
     }))
 

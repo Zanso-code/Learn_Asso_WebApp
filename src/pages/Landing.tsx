@@ -335,21 +335,29 @@ function CreateAssociationModal({
     const problem = validate()
     if (problem) return setError(problem)
     setBusy(true)
-    const name = await onCreate({
-      nom: nom.trim(),
-      sigle: sigle.trim() || nom.trim().slice(0, 6).toUpperCase(),
-      ville: ville.trim(),
-      pays,
-      responsable: responsable.trim(),
-      dialCode,
-      telephone: telephone.trim(),
-      email: email.trim(),
-      motDePasseCompte: pwdCompte,
-      motDePasseTresorier: pwdTreso,
-      logo,
-    })
-    setBusy(false)
-    toast.success(`Association « ${name} » créée — essai de 30 jours`)
+    try {
+      const name = await onCreate({
+        nom: nom.trim(),
+        sigle: sigle.trim() || nom.trim().slice(0, 6).toUpperCase(),
+        ville: ville.trim(),
+        pays,
+        responsable: responsable.trim(),
+        dialCode,
+        telephone: telephone.trim(),
+        email: email.trim(),
+        motDePasseCompte: pwdCompte,
+        motDePasseTresorier: pwdTreso,
+        logo,
+      })
+      toast.success(`Association « ${name} » créée — essai de 30 jours`)
+    } catch (err) {
+      // La création passe désormais par le serveur : e-mail déjà pris, réseau
+      // absent, mot de passe refusé. Sans ce filet, le bouton resterait bloqué
+      // sur « Création… » et l'utilisateur ne saurait pas pourquoi.
+      setError(err instanceof Error ? err.message : "Création impossible pour le moment.")
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (

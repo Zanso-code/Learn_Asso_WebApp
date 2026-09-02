@@ -3,11 +3,13 @@ import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-route
 import {
   BarChart3,
   CalendarClock,
+  CloudOff,
   Eye,
   FileText,
   HandCoins,
   LayoutGrid,
   LifeBuoy,
+  Loader2,
   LogOut,
   Receipt,
   Settings,
@@ -21,6 +23,7 @@ import { hasAccess, joursRestants } from '@/lib/subscription'
 import { Modal, cx } from './ui'
 import { useToast } from './Toast'
 import { TreasurerUnlockModal } from './TreasurerUnlock'
+import { SyncBadge } from './SyncBadge'
 
 interface NavItem {
   to: string
@@ -44,9 +47,46 @@ const MOBILE_NAV = NAV.filter((n) => n.to !== '/app/campagnes' && n.to !== '/app
 /** Show the renewal warning this many days before the cut-off. */
 const WARN_DAYS = 7
 
+function FullPageSpinner({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-navy-50 px-4">
+      <Loader2 className="size-7 animate-spin text-brand-600" />
+      <p className="text-sm font-semibold text-navy-600">{label}</p>
+    </div>
+  )
+}
+
+/**
+ * Premier accès sur un appareil, sans réseau : il n'existe ni miroir local ni
+ * moyen d'en constituer un. C'est le seul cas où l'application ne peut vraiment
+ * rien afficher.
+ */
+function LedgerError() {
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-navy-50 px-4 text-center">
+      <span className="flex size-12 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+        <CloudOff className="size-6" />
+      </span>
+      <div>
+        <h1 className="text-lg font-extrabold text-navy-900">Données indisponibles</h1>
+        <p className="mx-auto mt-1.5 max-w-sm text-sm text-navy-600">
+          Vos données n'ont pas encore été téléchargées sur cet appareil. Connectez-vous à Internet
+          une première fois, puis rouvrez l'application — elle fonctionnera ensuite hors ligne.
+        </p>
+      </div>
+      <button
+        onClick={() => window.location.reload()}
+        className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-brand-700"
+      >
+        Réessayer
+      </button>
+    </div>
+  )
+}
+
 export function Layout() {
-  const { db, role } = useStore()
-  const { account, session, lockTreasurer } = usePlatform()
+  const { db, role, status } = useStore()
+  const { account, session, lockTreasurer, ready } = usePlatform()
   const navigate = useNavigate()
   const location = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
@@ -58,8 +98,14 @@ export function Layout() {
   }, [location.pathname])
 
   // ---- Guards. Order matters: identify, then check the subscription, then data.
+  if (!ready) return <FullPageSpinner label="Ouverture de votre espace…" />
   if (!session || !account) return <Navigate to="/connexion" replace />
   if (!hasAccess(account)) return <Navigate to="/acces-expire" replace />
+
+  // Le grand livre vient désormais d'IndexedDB puis du serveur : il faut un
+  // état d'attente là où la lecture de localStorage était instantanée.
+  if (status === 'loading') return <FullPageSpinner label="Chargement des données…" />
+  if (status === 'error') return <LedgerError />
   if (!db) return <Navigate to="/connexion" replace />
 
   const isViewer = role === 'viewer'
@@ -129,6 +175,8 @@ export function Layout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-1.5 lg:ml-0">
+            <SyncBadge />
+
             <button
               onClick={handleRoleButton}
               title={isViewer ? 'Passer en mode Trésorier' : 'Revenir en lecture seule'}

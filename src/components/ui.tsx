@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
@@ -186,6 +187,77 @@ const CONTROL =
 
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(CONTROL, 'h-11', className)} {...rest} />
+}
+
+/**
+ * Champ texte relié directement à une donnée persistée.
+ *
+ * La frappe reste dans un état local ; la valeur n'est publiée qu'à la sortie
+ * du champ, sur Entrée, ou après une pause. Sans cela, chaque caractère tapé
+ * déclencherait une écriture — inoffensif face à un localStorage synchrone,
+ * ruineux dès lors que l'écriture part sur le réseau en 3G.
+ *
+ * La valeur venant de l'extérieur reprend la main tant que le champ n'a pas le
+ * focus : c'est ainsi qu'un renommage fait sur un autre appareil apparaît ici.
+ */
+export function CommitInput({
+  value,
+  onCommit,
+  delay = 600,
+  className,
+  ...rest
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> & {
+  value: string
+  onCommit: (next: string) => void
+  delay?: number
+}) {
+  const [draft, setDraft] = useState(value)
+  const [editing, setEditing] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const commitRef = useRef(onCommit)
+  commitRef.current = onCommit
+
+  const shown = editing ? draft : value
+
+  const flush = (next: string) => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    if (next !== value) commitRef.current(next)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [])
+
+  return (
+    <input
+      className={cx(CONTROL, 'h-11', className)}
+      value={shown}
+      onFocus={() => {
+        setDraft(value)
+        setEditing(true)
+      }}
+      onChange={(e) => {
+        const next = e.target.value
+        setDraft(next)
+        if (timer.current) clearTimeout(timer.current)
+        timer.current = setTimeout(() => {
+          timer.current = null
+          commitRef.current(next)
+        }, delay)
+      }}
+      onBlur={(e) => {
+        setEditing(false)
+        flush(e.target.value)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') flush(e.currentTarget.value)
+      }}
+      {...rest}
+    />
+  )
 }
 
 export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {

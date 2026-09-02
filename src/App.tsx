@@ -1,7 +1,9 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { isSupabaseConfigured } from '@/lib/supabase'
 import { PlatformProvider } from '@/lib/platform'
 import { StoreProvider } from '@/lib/store'
 import { ToastProvider } from '@/components/Toast'
+import { ConfigError } from '@/components/ConfigError'
 import { Layout } from '@/components/Layout'
 import { Landing } from '@/pages/Landing'
 import { Login } from '@/pages/Login'
@@ -18,6 +20,16 @@ import { Report } from '@/pages/Report'
 import { SettingsPage } from '@/pages/SettingsPage'
 
 export function App() {
+  // Garde de configuration, avant les providers : l'effet de démarrage de
+  // PlatformProvider partirait sinon chercher la session et les coordonnées de
+  // contact sur un serveur inexistant, et l'utilisateur n'aurait qu'une page
+  // qui tourne dans le vide pour tout diagnostic.
+  //
+  // Sans risque de faux positif : `isSupabaseConfigured` est calculé à partir
+  // de constantes figées à la compilation, jamais d'un appel réseau — un
+  // utilisateur hors ligne ne verra donc jamais cet écran.
+  if (!isSupabaseConfigured) return <ConfigError />
+
   return (
     // PlatformProvider owns the tenant accounts and the session; StoreProvider
     // reads that session to decide *which* association's ledger to load, so it

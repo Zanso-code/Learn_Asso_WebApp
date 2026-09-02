@@ -24,10 +24,13 @@ export function TreasurerUnlockModal({ open, onClose }: { open: boolean; onClose
   async function submit() {
     if (busy || !password) return
     setBusy(true)
-    const ok = await unlockTreasurer(password)
+    // Le déverrouillage ouvre désormais une vraie session Auth : l'échec n'est
+    // plus forcément un mauvais mot de passe (première fois sur cet appareil,
+    // réseau absent…), d'où un message venu de la couche plateforme.
+    const problem = await unlockTreasurer(password)
     setBusy(false)
-    if (!ok) {
-      setError('Mot de passe Trésorier incorrect.')
+    if (problem) {
+      setError(problem)
       setPassword('')
       return
     }

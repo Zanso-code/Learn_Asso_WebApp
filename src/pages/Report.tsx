@@ -17,7 +17,17 @@ import {
   periodRange,
   todayISO,
 } from '@/lib/format'
-import { Button, Card, Field, Input, Modal, PageHeader, Select, cx } from '@/components/ui'
+import {
+  Button,
+  Card,
+  CommitInput,
+  Field,
+  Input,
+  Modal,
+  PageHeader,
+  Select,
+  cx,
+} from '@/components/ui'
 
 function categoryLabel(value: string): string {
   return EXPENSE_CATEGORIES.find((c) => c.value === value)?.label ?? value
@@ -473,24 +483,24 @@ function ReportSettings({ open, onClose }: { open: boolean; onClose: () => void 
     >
       <div className="grid gap-4">
         <Field label="Nom de l'association">
-          <Input
+          <CommitInput
             value={a.name}
-            onChange={(e) => store.updateAssociation({ name: e.target.value })}
+            onCommit={(next) => store.updateAssociation({ name: next })}
             disabled={!isTreasurer}
           />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Sigle">
-            <Input
+            <CommitInput
               value={a.acronym}
-              onChange={(e) => store.updateAssociation({ acronym: e.target.value })}
+              onCommit={(next) => store.updateAssociation({ acronym: next })}
               disabled={!isTreasurer}
             />
           </Field>
           <Field label="Ville">
-            <Input
+            <CommitInput
               value={a.city}
-              onChange={(e) => store.updateAssociation({ city: e.target.value })}
+              onCommit={(next) => store.updateAssociation({ city: next })}
               placeholder="Ouagadougou"
               disabled={!isTreasurer}
             />
@@ -521,17 +531,17 @@ function ReportSettings({ open, onClose }: { open: boolean; onClose: () => void 
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Trésorier Général">
-            <Input
+            <CommitInput
               value={a.treasurerName}
-              onChange={(e) => store.updateAssociation({ treasurerName: e.target.value })}
+              onCommit={(next) => store.updateAssociation({ treasurerName: next })}
               placeholder="Nom et prénom"
               disabled={!isTreasurer}
             />
           </Field>
           <Field label="Président">
-            <Input
+            <CommitInput
               value={a.presidentName}
-              onChange={(e) => store.updateAssociation({ presidentName: e.target.value })}
+              onCommit={(next) => store.updateAssociation({ presidentName: next })}
               placeholder="Nom et prénom"
               disabled={!isTreasurer}
             />

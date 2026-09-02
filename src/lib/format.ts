@@ -102,6 +102,17 @@ export function initials(name: string): string {
     .join('')
 }
 
+/**
+ * Identifiant d'enregistrement.
+ *
+ * Un UUID v4 et non plus un horodatage suivi de cinq caracteres aleatoires :
+ * ces identifiants sont desormais des cles primaires generees en parallele sur
+ * plusieurs telephones, dont certains hors ligne. L'ancien schema laissait
+ * environ soixante millions de combinaisons par milliseconde — assez pour que
+ * deux tresoriers encaissant en meme temps dans la meme salle finissent par
+ * produire la meme cle. Le prefixe reste : il rend les enregistrements
+ * lisibles dans l'export Excel et dans la console.
+ */
 export function uid(prefix = 'id'): string {
-  return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
+  return `${prefix}_${crypto.randomUUID()}`
 }

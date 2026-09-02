@@ -2,19 +2,57 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- Les jetons de session Supabase vivent dans localStorage : sur une SPA
+         statique, sans serveur à nous, le cookie httpOnly n'est pas une option.
+         Ce qui rend ce choix tenable, c'est cette politique : même un XSS venu
+         d'une dépendance compromise n'aurait aucune destination autorisée vers
+         laquelle exfiltrer un jeton de rafraîchissement.
+
+         `connect-src` doit citer le projet Supabase — remplacez l'hôte
+         ci-dessous par celui de VITE_SUPABASE_URL, en HTTPS et en WSS (temps
+         réel). `img-src data: blob:` est indispensable : logos et reçus sont
+         des data URL. `'unsafe-inline'` sur style-src est exigé par Tailwind ;
+         script-src, lui, reste strict — c'est celui qui compte ici.
+
+         `frame-ancestors` est volontairement ABSENT : le navigateur l'ignore
+         dans une balise <meta> et se contente d'écrire une erreur en console à
+         chaque chargement, ce qui masquerait les vraies. La protection contre
+         l'inclusion en iframe passe donc par un en-tête HTTP de l'hébergeur —
+         `Content-Security-Policy: frame-ancestors 'none'` ou, à défaut,
+         `X-Frame-Options: DENY`. Voir le README. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self';
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data: blob:;
+               font-src 'self';
+               connect-src 'self' https://gvnxducufocfhekcmwmk.supabase.co wss://gvnxducufocfhekcmwmk.supabase.co;
+               worker-src 'self' blob:;
+               manifest-src 'self';
+               base-uri 'self';
+               form-action 'self';
+               object-src 'none'"
+    />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0066ff" />
     <meta name="description" content="Gérez les membres, cotisations, dépenses et rapports d'Assemblée Générale de votre association. Simple, rapide, transparent." />
 
-    <!-- Space Grotesk is the ZansoTech display face (guidelines §4.1). It is
-         applied to headings only; body copy and financial tables stay on
-         --font-sans, so this is one small woff2 on the critical path. -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Space Grotesk est auto-hébergée (voir src/index.css). La feuille de
+         style Google était la seule dépendance réseau au premier rendu, ce qui
+         n'a pas de sens dans une application conçue pour fonctionner hors
+         ligne : elle bloquait l'affichage sur une connexion absente ou lente. -->
     <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap"
+      rel="preload"
+      href="/fonts/space-grotesk-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
     />
 
     <title>AssoCaisse — Gestion d'association & ONG</title>

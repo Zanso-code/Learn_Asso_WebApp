@@ -199,9 +199,31 @@ export interface AssociationAccount {
   /** YYYY-MM-DD — access is cut off at the end of this day. */
   date_expiration_acces: string
   date_creation: string
-  motDePasseCompte: Secret
-  motDePasseTresorier: Secret
-  /** Free-text memo for the Platform Admin (payment reference, etc.). */
+  /**
+   * Secret Trésorier (PBKDF2), lu dans `treasurer_secrets` et mis en cache.
+   *
+   * Ce n'est plus ce qui *autorise* l'écriture — c'est l'identité Supabase Auth
+   * du Trésorier qui la porte, et la RLS qui la vérifie. Il ne sert plus qu'à
+   * une chose : reconnaître le mot de passe saisi quand il n'y a pas de réseau,
+   * pour qu'un trésorier puisse déverrouiller son rôle en pleine Assemblée
+   * Générale. Il vit dans sa propre table, hors de portée de l'Admin
+   * Plateforme, qui lisait auparavant le condensat de chaque association.
+   */
+  secretTresorier: Secret
+  /**
+   * Compte Supabase Auth du Trésorier, ou null tant qu'il n'a pas été créé
+   * (association antérieure à la migration 0002). Écrit uniquement par la
+   * fonction `set_treasurer_identity`, jamais par un UPDATE direct.
+   */
+  treasurerUserId: string | null
+  /**
+   * Mémo libre de l'Admin Plateforme (référence de paiement, historique).
+   *
+   * Porté par la table `association_notes`, et non par la ligne `associations` :
+   * là, il était lisible par l'association elle-même, alors que la console
+   * l'annonce « visible ici seulement ». Vide partout ailleurs que dans la
+   * console — le locataire n'a aucune ligne visible dans cette table.
+   */
   notes: string
 }
 
@@ -213,16 +235,21 @@ export interface PlatformContact {
   email: string
 }
 
-export interface PlatformState {
-  version: number
-  /** null until the Platform Admin password is chosen on first visit to /admin. */
-  admin: Secret | null
-  contact: PlatformContact
-  comptes: AssociationAccount[]
-}
-
-/** The signed-in association, plus the role currently unlocked for it. */
+/**
+ * The signed-in association, plus the role currently unlocked for it.
+ *
+ * `role` est délibérément absent de ce qui est *persisté* (voir
+ * `writeJSON(SESSION_KEY, …)` dans platform.tsx) : il ne vit qu'en mémoire.
+ * Tant qu'il était écrit dans localStorage, le passer à `treasurer` à la main
+ * suffisait à ouvrir l'écriture. Chaque ouverture de l'application repart donc
+ * en lecture seule, et le rôle Trésorier se redemande.
+ */
 export interface Session {
   associationId: string
   role: Role
+}
+
+/** Ce que la session dépose réellement dans localStorage. */
+export interface StoredSession {
+  associationId: string
 }
