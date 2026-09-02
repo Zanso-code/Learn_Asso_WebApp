@@ -19,11 +19,12 @@ export function Logout() {
   const announced = useRef(false)
 
   useEffect(() => {
-    logout()
-    if (!announced.current) {
-      announced.current = true
-      toast.toast('Vous êtes déconnecté', 'info')
-    }
+    // `logout` change d'identité à chaque rendu du provider et fait désormais
+    // un aller-retour réseau : sans ce garde, l'effet le rejouerait.
+    if (announced.current) return
+    announced.current = true
+    void logout()
+    toast.toast('Vous êtes déconnecté', 'info')
   }, [logout, toast])
 
   if (!session) return <Navigate to="/" replace />

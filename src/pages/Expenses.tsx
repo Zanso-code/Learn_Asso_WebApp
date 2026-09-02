@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import type { Expense, ExpenseCategory } from '@/lib/types'
 import { EXPENSE_CATEGORIES } from '@/lib/types'
-import { useDB } from '@/lib/store'
+import { useDB, useStore } from '@/lib/store'
 import { useToast } from '@/components/Toast'
 import { expensesByCategory, totalExpenses } from '@/lib/selectors'
 import { ExpenseShareBar } from '@/components/charts'
@@ -268,22 +268,24 @@ export function Expenses() {
 /* ------------------------------------------------------------ Receipt bits */
 
 /**
- * Loads a receipt out of IndexedDB. The loaded key is held alongside the image
- * so a stale blob is discarded during render rather than cleared in an effect.
+ * Charge un reçu : cache IndexedDB d'abord, Supabase Storage ensuite. La clé
+ * chargée est conservée à côté de l'image pour qu'un blob périmé soit écarté au
+ * rendu plutôt que nettoyé dans un effet.
  */
 function useReceipt(receiptKey?: string): string | null {
+  const { associationId } = useStore()
   const [loaded, setLoaded] = useState<{ key: string; src: string | null } | null>(null)
 
   useEffect(() => {
-    if (!receiptKey) return
+    if (!receiptKey || !associationId) return
     let cancelled = false
-    getReceipt(receiptKey).then((src) => {
+    getReceipt(associationId, receiptKey).then((src) => {
       if (!cancelled) setLoaded({ key: receiptKey, src })
     })
     return () => {
       cancelled = true
     }
-  }, [receiptKey])
+  }, [associationId, receiptKey])
 
   return loaded && loaded.key === receiptKey ? loaded.src : null
 }
@@ -356,6 +358,7 @@ const BLANK: Omit<Expense, 'id'> = {
 
 function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: () => void }) {
   const store = useDB()
+  const associationId = store.associationId
   const toast = useToast()
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -371,14 +374,14 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
   useEffect(() => {
     let cancelled = false
     if (expense?.receiptKey) {
-      getReceipt(expense.receiptKey).then((value) => {
+      getReceipt(associationId, expense.receiptKey).then((value) => {
         if (!cancelled) setPreview(value)
       })
     }
     return () => {
       cancelled = true
     }
-  }, [expense])
+  }, [associationId, expense])
 
   async function handleFile(file: File | undefined) {
     if (!file) return
@@ -390,8 +393,8 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
     try {
       const result = await compressReceipt(file)
       const key = uid('rcpt')
-      await putReceipt(key, result.dataUrl)
-      if (pendingKey) void deleteReceipt(pendingKey)
+      await putReceipt(associationId, key, result.dataUrl)
+      if (pendingKey) void deleteReceipt(associationId, pendingKey)
       setPendingKey(key)
       setPreview(result.dataUrl)
       setStats({ from: result.originalBytes, to: result.bytes })
@@ -408,7 +411,7 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
   }
 
   function removeReceipt() {
-    if (pendingKey) void deleteReceipt(pendingKey)
+    if (pendingKey) void deleteReceipt(associationId, pendingKey)
     setPendingKey(null)
     setPreview(null)
     setStats(null)
@@ -431,9 +434,9 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
     if (expense) {
       // Replacing a receipt: drop the old blob once the new one is committed.
       if (pendingKey && expense.receiptKey && expense.receiptKey !== pendingKey) {
-        void deleteReceipt(expense.receiptKey)
+        void deleteReceipt(associationId, expense.receiptKey)
       }
-      if (!receiptKey && expense.receiptKey) void deleteReceipt(expense.receiptKey)
+      if (!receiptKey && expense.receiptKey) void deleteReceipt(associationId, expense.receiptKey)
       store.updateExpense(expense.id, data)
       toast.success('Dépense mise à jour')
     } else {
@@ -444,7 +447,7 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
   }
 
   function cancel() {
-    if (pendingKey) void deleteReceipt(pendingKey)
+    if (pendingKey) void deleteReceipt(associationId, pendingKey)
     onClose()
   }
 

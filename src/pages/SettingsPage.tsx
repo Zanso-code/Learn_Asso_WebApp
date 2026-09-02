@@ -28,9 +28,9 @@ import {
   Badge,
   Button,
   Card,
+  CommitInput,
   CardHeader,
   Field,
-  Input,
   Modal,
   PageHeader,
   PasswordInput,
@@ -119,24 +119,24 @@ export function SettingsPage() {
             </Field>
 
             <Field label="Nom complet">
-              <Input
+              <CommitInput
                 value={a.name}
-                onChange={(e) => store.updateAssociation({ name: e.target.value })}
+                onCommit={(next) => store.updateAssociation({ name: next })}
                 disabled={!isTreasurer}
               />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Sigle">
-                <Input
+                <CommitInput
                   value={a.acronym}
-                  onChange={(e) => store.updateAssociation({ acronym: e.target.value })}
+                  onCommit={(next) => store.updateAssociation({ acronym: next })}
                   disabled={!isTreasurer}
                 />
               </Field>
               <Field label="Ville">
-                <Input
+                <CommitInput
                   value={a.city}
-                  onChange={(e) => store.updateAssociation({ city: e.target.value })}
+                  onCommit={(next) => store.updateAssociation({ city: next })}
                   placeholder="Ouagadougou"
                   disabled={!isTreasurer}
                 />
@@ -167,16 +167,16 @@ export function SettingsPage() {
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Trésorier Général">
-                <Input
+                <CommitInput
                   value={a.treasurerName}
-                  onChange={(e) => store.updateAssociation({ treasurerName: e.target.value })}
+                  onCommit={(next) => store.updateAssociation({ treasurerName: next })}
                   disabled={!isTreasurer}
                 />
               </Field>
               <Field label="Président">
-                <Input
+                <CommitInput
                   value={a.presidentName}
-                  onChange={(e) => store.updateAssociation({ presidentName: e.target.value })}
+                  onCommit={(next) => store.updateAssociation({ presidentName: next })}
                   disabled={!isTreasurer}
                 />
               </Field>
@@ -185,10 +185,10 @@ export function SettingsPage() {
               label="Début du suivi des cotisations"
               hint={`Les cotisations sont comptées à partir de ${periodLabel(a.fiscalStart)}.`}
             >
-              <Input
+              <CommitInput
                 type="month"
                 value={a.fiscalStart}
-                onChange={(e) => store.updateAssociation({ fiscalStart: e.target.value })}
+                onCommit={(next) => store.updateAssociation({ fiscalStart: next })}
                 disabled={!isTreasurer}
               />
             </Field>
@@ -377,9 +377,10 @@ export function SettingsPage() {
 
               <p className="mt-3 flex items-start gap-2 rounded-xl bg-navy-50 px-3.5 py-3 text-xs leading-relaxed text-navy-600">
                 <Database className="mt-0.5 size-4 shrink-0 text-navy-400" />
-                Tout est enregistré dans le navigateur de cet appareil : les données restent
-                privées et l'application fonctionne sans connexion. Exportez régulièrement une
-                sauvegarde avant de changer de téléphone ou de vider le cache. Les photos de
+                Vos données sont enregistrées sur nos serveurs et copiées sur cet appareil :
+                l'application continue de fonctionner sans réseau, et tout ce que vous saisissez
+                hors connexion repart automatiquement dès que la connexion revient. Changer de
+                téléphone ne fait plus rien perdre — il suffit de vous reconnecter. Les photos de
                 justificatifs ne sont pas incluses dans le fichier Excel.
               </p>
             </div>
@@ -483,7 +484,8 @@ function ChangePasswordModal({
 }: {
   kind: 'tresorier' | 'compte' | null
   onClose: () => void
-  onSubmit: (current: string, next: string) => Promise<boolean>
+  /** Renvoie un message d'erreur, ou null si le changement a réussi. */
+  onSubmit: (current: string, next: string) => Promise<string | null>
 }) {
   const toast = useToast()
   const [current, setCurrent] = useState('')
@@ -505,10 +507,12 @@ function ChangePasswordModal({
     if (problem) return setError(problem)
     if (next !== confirm) return setError('Les deux nouveaux mots de passe ne correspondent pas.')
     setBusy(true)
-    const ok = await onSubmit(current, next)
+    const failed = await onSubmit(current, next)
     setBusy(false)
-    if (!ok) {
-      setError('Mot de passe actuel incorrect.')
+    if (failed) {
+      // Le message vient du serveur : « mot de passe incorrect » et « hors
+      // ligne » appellent des réactions très différentes de l'utilisateur.
+      setError(failed)
       setCurrent('')
       return
     }

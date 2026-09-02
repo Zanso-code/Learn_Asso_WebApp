@@ -4,34 +4,33 @@ import { ArrowLeft, LogIn, TriangleAlert } from 'lucide-react'
 import { usePlatform } from '@/lib/platform'
 import { BrandLockup } from '@/components/BrandLockup'
 import { useToast } from '@/components/Toast'
-import { Button, Field, PasswordInput, Select } from '@/components/ui'
+import { Button, Field, Input, PasswordInput } from '@/components/ui'
 
 export function Login() {
-  const { comptes, login } = usePlatform()
+  const { login } = usePlatform()
   const navigate = useNavigate()
   const toast = useToast()
 
-  const [associationId, setAssociationId] = useState(comptes[0]?.id ?? '')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!associationId || busy) return
+    if (busy || !email) return
     setBusy(true)
     setError('')
-    const ok = await login(associationId, password)
+    const message = await login(email, password)
     setBusy(false)
-    if (!ok) {
-      setError('Mot de passe incorrect.')
+    if (message) {
+      setError(message)
       setPassword('')
       return
     }
-    const nom = comptes.find((c) => c.id === associationId)?.nom ?? ''
-    toast.success(`Connecté — ${nom}`)
-    // The subscription guard on /app decides whether the dashboard opens or
-    // the "accès expiré" page does.
+    toast.success('Connecté')
+    // Le garde d'abonnement sur /app décide ensuite si le tableau de bord
+    // s'ouvre ou si la page « accès expiré » prend la main.
     navigate('/app', { replace: true })
   }
 
@@ -57,63 +56,54 @@ export function Login() {
               Connexion
             </h1>
             <p className="mt-1.5 text-sm text-navy-600">
-              Accédez à l'espace de votre association.
+              Accédez à l'espace de votre association, depuis n'importe quel appareil.
             </p>
 
-            {comptes.length === 0 ? (
-              <div className="mt-6">
-                <p className="flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-3 text-sm leading-relaxed text-amber-800">
+            <form onSubmit={handleSubmit} className="mt-6 grid gap-4">
+              <Field label="E-mail de l'association">
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    setError('')
+                  }}
+                  placeholder="tresorier@monasso.org"
+                  autoComplete="username"
+                  autoFocus
+                />
+              </Field>
+
+              <Field label="Mot de passe du compte">
+                <PasswordInput
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value)
+                    setError('')
+                  }}
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                />
+              </Field>
+
+              {error && (
+                <p className="flex items-start gap-2 rounded-xl bg-red-50 px-3.5 py-3 text-sm font-medium text-red-700">
                   <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                  Aucune association n'est enregistrée sur cet appareil. Créez-en une pour
-                  commencer.
+                  {error}
                 </p>
-                <Button full className="mt-4" onClick={() => navigate('/')}>
-                  Créer mon association
-                </Button>
-              </div>
-            ) : (
-              <form onSubmit={handleSubmit} className="mt-6 grid gap-4">
-                <Field label="Association">
-                  <Select
-                    value={associationId}
-                    onChange={(e) => {
-                      setAssociationId(e.target.value)
-                      setError('')
-                    }}
-                  >
-                    {comptes.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.sigle ? `${c.sigle} — ${c.nom}` : c.nom}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
+              )}
 
-                <Field label="Mot de passe du compte" error={error || undefined}>
-                  <PasswordInput
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value)
-                      setError('')
-                    }}
-                    autoComplete="current-password"
-                    placeholder="••••••••"
-                    autoFocus
-                  />
-                </Field>
+              <Button type="submit" full disabled={busy || !email || !password}>
+                <LogIn className="size-4" />
+                {busy ? 'Vérification…' : 'Se connecter'}
+              </Button>
 
-                <Button type="submit" full disabled={busy || !password}>
-                  <LogIn className="size-4" />
-                  {busy ? 'Vérification…' : 'Se connecter'}
-                </Button>
-
-                <p className="rounded-xl bg-navy-50 px-3.5 py-3 text-xs leading-relaxed text-navy-600">
-                  Vous entrez en mode <strong>Président / Secrétaire</strong> (lecture seule). Le
-                  rôle <strong>Trésorier</strong> se déverrouille ensuite avec son propre mot de
-                  passe.
-                </p>
-              </form>
-            )}
+              <p className="rounded-xl bg-navy-50 px-3.5 py-3 text-xs leading-relaxed text-navy-600">
+                Vous entrez en mode <strong>Président / Secrétaire</strong> (lecture seule). Le
+                rôle <strong>Trésorier</strong> se déverrouille ensuite avec son propre mot de
+                passe.
+              </p>
+            </form>
           </div>
 
           <p className="mt-5 text-center text-sm text-navy-600">

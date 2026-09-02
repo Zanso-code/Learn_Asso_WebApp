@@ -24,6 +24,7 @@ import {
   Badge,
   Button,
   Card,
+  CommitInput,
   EmptyState,
   Field,
   Input,
@@ -564,9 +565,9 @@ function CategoriesModal({ open, onClose }: { open: boolean; onClose: () => void
             key={c.id}
             className="flex flex-wrap items-center gap-2 rounded-xl border border-navy-200 p-3"
           >
-            <Input
+            <CommitInput
               value={c.name}
-              onChange={(e) => store.updateCategory(c.id, { name: e.target.value })}
+              onCommit={(next) => store.updateCategory(c.id, { name: next })}
               className="min-w-0 flex-1"
               aria-label="Nom de la catégorie"
             />

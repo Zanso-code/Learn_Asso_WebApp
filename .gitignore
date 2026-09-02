@@ -10,6 +10,14 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Variables d'environnement — jamais dans le depot.
+# .env.local n'etait couvert que par ricochet, via le motif "*.local" plus bas :
+# .env et .env.production, eux, passaient. Un secret entre dans l'historique git
+# y reste meme apres suppression du fichier.
+.env
+.env.*
+!.env.example
+
 *.local
 
 # Editor directories and files

@@ -1,16 +1,23 @@
 /**
- * Storage keys, in one place so the platform layer and the tenant store agree
- * on where a given association's ledger lives.
+ * Le peu qui reste dans localStorage.
+ *
+ * Le grand livre, la file d'attente et les photos vivent desormais dans
+ * IndexedDB (voir src/lib/idb.ts), et les comptes sur le serveur. Ne subsiste
+ * ici que la session : elle doit etre lisible de facon SYNCHRONE au tout
+ * premier rendu, avant meme qu'IndexedDB ne soit ouverte, pour savoir quelle
+ * association charger sans faire clignoter l'ecran de connexion.
  */
 
-export const PLATFORM_KEY = 'assocaisse:platform:v1'
 export const SESSION_KEY = 'assocaisse:session:v1'
-export const ADMIN_SESSION_KEY = 'assocaisse:admin-session:v1'
 
-/** Each association's ledger is a separate entry — tenants never share one. */
-export function tenantKey(associationId: string): string {
-  return `assocaisse:tenant:${associationId}:v1`
-}
+/**
+ * Compteur d'echecs du deverrouillage Tresorier.
+ *
+ * Il ralentit les tentatives repetees, sans pretendre les empecher : il vit du
+ * cote de l'attaquant et reste effacable. Ce qui refuse reellement l'ecriture,
+ * c'est la session Supabase Auth exigee par la RLS (voir platform.tsx).
+ */
+export const UNLOCK_ATTEMPTS_KEY = 'assocaisse:unlock-attempts:v1'
 
 export function readJSON<T>(key: string): T | null {
   try {
@@ -33,6 +40,6 @@ export function removeKey(key: string): void {
   try {
     localStorage.removeItem(key)
   } catch {
-    /* private browsing */
+    /* navigation privee */
   }
 }

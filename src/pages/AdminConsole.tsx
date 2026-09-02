@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowDown,
@@ -43,12 +43,10 @@ export function AdminConsole() {
 }
 
 /* ------------------------------------------------------------------- Gate */
-
 function AdminGate() {
-  const { adminExists, adminSetup, adminLogin } = usePlatform()
-  const toast = useToast()
+  const { adminLogin } = usePlatform()
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -56,23 +54,11 @@ function AdminGate() {
     e.preventDefault()
     if (busy) return
     setError('')
-
-    if (!adminExists) {
-      const problem = passwordProblem(password)
-      if (problem) return setError(problem)
-      if (password !== confirm) return setError('Les deux mots de passe ne correspondent pas.')
-      setBusy(true)
-      await adminSetup(password)
-      setBusy(false)
-      toast.success('Console plateforme initialisée')
-      return
-    }
-
     setBusy(true)
-    const ok = await adminLogin(password)
+    const message = await adminLogin(email, password)
     setBusy(false)
-    if (!ok) {
-      setError('Mot de passe incorrect.')
+    if (message) {
+      setError(message)
       setPassword('')
     }
   }
@@ -88,15 +74,28 @@ function AdminGate() {
             Console Plateforme
           </h1>
           <p className="mt-1.5 text-sm text-navy-300">
-            {adminExists
-              ? 'Espace réservé à l’administrateur de la plateforme.'
-              : 'Premier accès : définissez votre mot de passe administrateur.'}
+            Espace réservé à l’administrateur de la plateforme.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-6 grid gap-4">
             <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold text-navy-200">E-mail</span>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value)
+                  setError('')
+                }}
+                placeholder="admin@exemple.com"
+                autoComplete="username"
+                autoFocus
+              />
+            </label>
+
+            <label className="block">
               <span className="mb-1.5 block text-sm font-semibold text-navy-200">
-                {adminExists ? 'Mot de passe' : 'Nouveau mot de passe'}
+                Mot de passe
               </span>
               <PasswordInput
                 value={password}
@@ -105,27 +104,9 @@ function AdminGate() {
                   setError('')
                 }}
                 placeholder="••••••••"
-                autoComplete={adminExists ? 'current-password' : 'new-password'}
-                autoFocus
+                autoComplete="current-password"
               />
             </label>
-
-            {!adminExists && (
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-navy-200">
-                  Confirmer le mot de passe
-                </span>
-                <PasswordInput
-                  value={confirm}
-                  onChange={(e) => {
-                    setConfirm(e.target.value)
-                    setError('')
-                  }}
-                  placeholder="••••••••"
-                  autoComplete="new-password"
-                />
-              </label>
-            )}
 
             {error && (
               <p className="flex items-start gap-2 rounded-xl bg-red-500/15 px-3.5 py-3 text-sm font-medium text-red-200">
@@ -134,18 +115,17 @@ function AdminGate() {
               </p>
             )}
 
-            <Button type="submit" full disabled={busy || !password}>
+            <Button type="submit" full disabled={busy || !email || !password}>
               <LockKeyhole className="size-4" />
-              {busy ? 'Vérification…' : adminExists ? 'Se connecter' : 'Définir et continuer'}
+              {busy ? 'Vérification…' : 'Se connecter'}
             </Button>
           </form>
 
-          {!adminExists && (
-            <p className="mt-4 rounded-xl bg-navy-900/60 px-3.5 py-3 text-xs leading-relaxed text-navy-300">
-              Ce mot de passe est stocké uniquement sur cet appareil. Notez-le : il n'existe aucune
-              procédure de récupération.
-            </p>
-          )}
+          <p className="mt-4 rounded-xl bg-navy-900/60 px-3.5 py-3 text-xs leading-relaxed text-navy-300">
+            Le compte administrateur se crée côté serveur : inscrivez son identifiant dans la table
+            <code className="mx-1 rounded bg-navy-900 px-1 py-0.5">platform_admins</code>. Aucun
+            visiteur ne peut se l’attribuer depuis cette page.
+          </p>
         </div>
 
         <p className="mt-5 text-center text-sm text-navy-400">
@@ -174,7 +154,8 @@ const STATUS_TONE: Record<SubscriptionStatus, 'brand' | 'amber' | 'red' | 'navy'
 const SOON_DAYS = 7
 
 function Console() {
-  const { comptes, contact, adminLogout, updateAccount, deleteAccount } = usePlatform()
+  const { comptes, contact, adminLogout, updateAccount, deleteAccount, refreshComptes } =
+    usePlatform()
   const toast = useToast()
 
   const [query, setQuery] = useState('')
@@ -183,7 +164,13 @@ function Console() {
   const [asc, setAsc] = useState(true)
   const [editing, setEditing] = useState<AssociationAccount | null>(null)
   const [removing, setRemoving] = useState<AssociationAccount | null>(null)
+
+  // La liste des associations vient du serveur, la console ne la detient plus.
   const [contactOpen, setContactOpen] = useState(false)
+
+  useEffect(() => {
+    void refreshComptes()
+  }, [refreshComptes])
 
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -244,12 +231,16 @@ function Console() {
   }
 
   /** One-tap renewal: mark paid and push the date out from today. */
-  function renew(account: AssociationAccount, months: number) {
-    updateAccount(account.id, {
-      statut_abonnement: 'actif',
-      date_expiration_acces: extendedExpiry(account.date_expiration_acces, months),
-    })
-    toast.success(`${account.sigle || account.nom} — accès prolongé de ${months} mois`)
+  async function renew(account: AssociationAccount, months: number) {
+    try {
+      await updateAccount(account.id, {
+        statut_abonnement: 'actif',
+        date_expiration_acces: extendedExpiry(account.date_expiration_acces, months),
+      })
+      toast.success(`${account.sigle || account.nom} — accès prolongé de ${months} mois`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Prolongation impossible')
+    }
   }
 
   return (
@@ -520,10 +511,14 @@ function Console() {
         <EditAccountModal
           account={editing}
           onClose={() => setEditing(null)}
-          onSave={(patch) => {
-            updateAccount(editing.id, patch)
-            setEditing(null)
-            toast.success('Abonnement mis à jour')
+          onSave={async (patch) => {
+            try {
+              await updateAccount(editing.id, patch)
+              setEditing(null)
+              toast.success('Abonnement mis à jour')
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : 'Enregistrement impossible')
+            }
           }}
         />
       )}
@@ -539,11 +534,15 @@ function Console() {
             </Button>
             <Button
               variant="danger"
-              onClick={() => {
+              onClick={async () => {
                 if (!removing) return
-                deleteAccount(removing.id)
-                toast.toast(`${removing.nom} supprimée`, 'info')
-                setRemoving(null)
+                try {
+                  await deleteAccount(removing.id)
+                  toast.toast(`${removing.nom} supprimée`, 'info')
+                  setRemoving(null)
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Suppression impossible')
+                }
               }}
             >
               <Trash2 className="size-4" />
@@ -724,12 +723,13 @@ function EditAccountModal({
 }
 
 function ContactModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { contact, updateContact, adminSetup } = usePlatform()
+  const { contact, updateContact, changeAdminPassword } = usePlatform()
   const toast = useToast()
   const [nom, setNom] = useState(contact.nom)
   const [dialCode, setDialCode] = useState(contact.dialCode)
   const [telephone, setTelephone] = useState(contact.telephone)
   const [email, setEmail] = useState(contact.email)
+  const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState('')
 
@@ -737,10 +737,19 @@ function ContactModal({ open, onClose }: { open: boolean; onClose: () => void })
     if (newPassword) {
       const problem = passwordProblem(newPassword)
       if (problem) return setError(problem)
-      await adminSetup(newPassword)
+      // Le mot de passe actuel est exigé : sans lui, une console laissée
+      // ouverte sur un poste partagé suffisait à prendre la plateforme.
+      if (!currentPassword) return setError('Saisissez le mot de passe administrateur actuel.')
+      const failed = await changeAdminPassword(currentPassword, newPassword)
+      if (failed) return setError(failed)
     }
-    updateContact({ nom, dialCode, telephone, email })
+    try {
+      await updateContact({ nom, dialCode, telephone, email })
+    } catch (err) {
+      return setError(err instanceof Error ? err.message : 'Enregistrement impossible')
+    }
     toast.success('Paramètres de la plateforme enregistrés')
+    setCurrentPassword('')
     setNewPassword('')
     setError('')
     onClose()
@@ -796,7 +805,6 @@ function ContactModal({ open, onClose }: { open: boolean; onClose: () => void })
         <Field
           label="Nouveau mot de passe administrateur"
           hint="Laissez vide pour conserver le mot de passe actuel."
-          error={error || undefined}
         >
           <PasswordInput
             value={newPassword}
@@ -808,6 +816,30 @@ function ContactModal({ open, onClose }: { open: boolean; onClose: () => void })
             placeholder="••••••••"
           />
         </Field>
+
+        {newPassword && (
+          <Field
+            label="Mot de passe administrateur actuel"
+            hint="Exigé pour confirmer que c'est bien vous."
+            error={error || undefined}
+          >
+            <PasswordInput
+              value={currentPassword}
+              onChange={(e) => {
+                setCurrentPassword(e.target.value)
+                setError('')
+              }}
+              autoComplete="current-password"
+              placeholder="••••••••"
+            />
+          </Field>
+        )}
+
+        {error && !newPassword && (
+          <p className="rounded-xl bg-red-50 px-3.5 py-3 text-sm font-medium text-red-700">
+            {error}
+          </p>
+        )}
       </div>
     </Modal>
   )

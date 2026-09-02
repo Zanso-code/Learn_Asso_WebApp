@@ -61,8 +61,19 @@ export async function verifyPassword(
   return diff === 0
 }
 
-/** Shared rule for both passwords, surfaced in French next to the field. */
+/**
+ * Shared rule for both passwords, surfaced in French next to the field.
+ *
+ * Huit caractères mêlant lettres et chiffres, et non plus six quelconques : le
+ * mot de passe Trésorier est vérifié hors ligne contre le condensat mis en
+ * cache, donc sans la limitation de fréquence du serveur. Six chiffres — le
+ * réflexe naturel sur un téléphone — laissaient un espace de 10⁶, parcourable
+ * par script sur un appareil emprunté.
+ */
 export function passwordProblem(password: string): string | null {
-  if (password.length < 6) return 'Le mot de passe doit contenir au moins 6 caractères.'
+  if (password.length < 8) return 'Le mot de passe doit contenir au moins 8 caractères.'
+  if (!/[0-9]/.test(password) || !/[a-zA-Z]/.test(password)) {
+    return 'Le mot de passe doit mêler des lettres et des chiffres.'
+  }
   return null
 }
