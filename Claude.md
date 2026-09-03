@@ -128,3 +128,75 @@ Pre-populate the demo database with realistic data:
 5. Verify build integrity (`npm run build` or dev test) and ensure zero runtime errors.
 
 Proceed step-by-step and create the full application.
+
+---
+
+## 7. DEV ENVIRONMENT: MCP SERVER SETUP
+
+Notes for setting this repo up on a new machine. The Claude Code plugins
+(`github`, `supabase`, `vercel`, `playwright`) are enabled in the user-level
+`~/.claude/settings.json`, but their MCP servers each need credentials.
+
+### GitHub — requires a CLASSIC personal access token
+
+The GitHub MCP server reads its credential from the `GITHUB_PERSONAL_ACCESS_TOKEN`
+environment variable (`Authorization: Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}`).
+It is **not** an OAuth flow — `/mcp` will not fix it.
+
+**Gotcha:** a *fine-grained* token (`github_pat_...`) is rejected with
+`400 Bad Request`. Use a **classic** token (`ghp_...`) from
+<https://github.com/settings/tokens/new> with scopes `repo` and `read:org`.
+
+Symptoms, in order of progress:
+
+| Error | Meaning |
+| --- | --- |
+| `Authorization header is badly formatted` | env var is unset |
+| `400 Bad Request` | env var is set but the token is fine-grained |
+| _connects_ | classic token with `repo` + `read:org` |
+
+Set it on Windows without leaking the value into shell history:
+
+```powershell
+$t = Read-Host "Paste classic GitHub PAT" -AsSecureString
+[Environment]::SetEnvironmentVariable(
+  'GITHUB_PERSONAL_ACCESS_TOKEN',
+  [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($t)),
+  'User')
+```
+
+Restart the Claude desktop app afterwards — env vars are read at launch.
+
+### Vercel and Supabase — OAuth via `/mcp`
+
+Both are HTTP MCP servers (`mcp.vercel.com`, `mcp.supabase.com/mcp`) using OAuth.
+Authorize them from an **interactive terminal**, not the desktop Code tab:
+
+```bash
+cd <repo root> && claude    # then type /mcp, pick the server, choose Authenticate
+```
+
+Credentials are stored in `~/.claude/.credentials.json` and shared with the
+desktop app after a restart.
+
+### Vercel project linking
+
+`vercel connect` is unrelated to MCP auth — it mints third-party tokens for a
+deployed app at runtime. Ignore it for local setup.
+
+The repo is already linked: `.vercel/repo.json` holds project `assocaisse`
+(`prj_mvobjwffukpUU3oyTQDfFaff82lI`) under org `team_YdMpV4SkHf2UYigbW993ZUvl`.
+
+**Open issue:** the Vercel MCP tools still cannot read that org. `list_teams`
+returns `[]` and `list_projects` fails even when passed the real `orgId`, which
+means the OAuth grant covers the personal scope only. To fix, re-run `/mcp` ->
+vercel -> Authenticate and grant access to the **team** on Vercel's consent
+screen. Until then, use the `vercel` CLI for deployment inspection.
+
+### Notes
+
+- Supabase project: `Zanso-code's Project_Saas` (`gvnxducufocfhekcmwmk`, eu-west-3).
+- A claude.ai Supabase connector may already be present, giving two paths to the
+  same project. Harmless but redundant; disable one via `/mcp` if tool names clash.
+- `.agents/mcp_config.json` is gitignored and currently empty — safe to delete.
