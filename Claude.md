@@ -188,11 +188,13 @@ deployed app at runtime. Ignore it for local setup.
 The repo is already linked: `.vercel/repo.json` holds project `assocaisse`
 (`prj_mvobjwffukpUU3oyTQDfFaff82lI`) under org `team_YdMpV4SkHf2UYigbW993ZUvl`.
 
-**Open issue:** the Vercel MCP tools still cannot read that org. `list_teams`
-returns `[]` and `list_projects` fails even when passed the real `orgId`, which
-means the OAuth grant covers the personal scope only. To fix, re-run `/mcp` ->
-vercel -> Authenticate and grant access to the **team** on Vercel's consent
-screen. Until then, use the `vercel` CLI for deployment inspection.
+The org is `ZansoTech` (slug `zanso-tech`, hobby plan). The Vercel MCP tools
+require a `teamId`: pass `team_YdMpV4SkHf2UYigbW993ZUvl`, or read it from
+`.vercel/repo.json`.
+
+**Worth knowing:** right after the OAuth authorization, `list_teams` may return
+`[]` and `list_projects` may fail for a few minutes while the grant propagates.
+That is not a misconfiguration — retry before re-running `/mcp`.
 
 ### Notes
 
