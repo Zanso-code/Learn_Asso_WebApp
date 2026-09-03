@@ -39,3 +39,4 @@ dist-ssr
 .tmp
 .vercel
 .env*
+!.env.example
