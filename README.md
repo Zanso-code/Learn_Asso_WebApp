@@ -49,10 +49,37 @@ le projet Supabase branché.
    diagnostic à exécuter seul (l'éditeur SQL n'affiche que le dernier résultat
    d'un lot).
 
+   **e.** [`supabase/migrations/0005_cloison_tresorier.sql`](supabase/migrations/0005_cloison_tresorier.sql)
+   — **obligatoire.** Ferme les conclusions de l'audit de sécurité. Trois
+   chemins indépendants permettaient au compte du **bureau** — celui que
+   l'application décrit comme « lecture seule » — d'obtenir l'écriture sur tout
+   le grand livre :
+
+   - `set_treasurer_identity()` acceptait d'**écraser** un Trésorier déjà
+     désigné. Le titulaire du compte du bureau pouvait donc s'inscrire un second
+     compte Auth, se l'attribuer comme trésorier et se connecter avec : le mot
+     de passe Trésorier n'était jamais demandé, et le trésorier légitime se
+     retrouvait évincé. La fonction est désormais réservée à l'**amorçage**, et
+     `rotate_treasurer_identity()` gère la passation — réservée, elle, au
+     trésorier en exercice.
+   - La lecture de `treasurer_secrets` n'exigeait que l'appartenance au
+     locataire, pas le rôle : le compte du bureau téléchargeait le condensat
+     PBKDF2 du mot de passe Trésorier — qui est **aussi** celui du compte Auth
+     du trésorier — et pouvait le casser hors ligne, sans limitation de
+     fréquence. La politique exige maintenant `can_write()`.
+   - Le troisième chemin était côté client (`openTreasurerSession` renvoyait un
+     succès dès qu'une session dormait sur l'appareil) et se corrige par le
+     code, pas par le SQL.
+
+   Le fichier complète aussi les bornes de colonnes laissées par `0002` §9,
+   retire `email` du `GRANT UPDATE`, et valide les contraintes restées
+   `NOT VALID`. Il se termine par une requête de vérification qui doit rendre
+   `true`.
+
    **`0002` ne doit jamais être rejoué seul après `0003`** : il lit
    `associations.tresorier_secret` et `associations.notes`, deux colonnes que
-   les migrations suivantes suppriment. `0001`, `0003` et `0004` sont, eux,
-   rejouables sans dommage.
+   les migrations suivantes suppriment. `0001`, `0003`, `0004` et `0005` sont,
+   eux, rejouables sans dommage.
 
    Après application, ces deux requêtes doivent confirmer l'état attendu :
 
@@ -93,29 +120,53 @@ le projet Supabase branché.
    ignore la RLS et livrerait à chaque visiteur les données de toutes les
    associations.
 
-   **Reporter l'URL du projet dans la CSP.** [`index.html`](index.html) porte
-   une `Content-Security-Policy` dont la directive `connect-src` cite l'hôte
-   Supabase en dur — une CSP ne lit pas les variables d'environnement. Si votre
-   projet a une autre URL que celle qui s'y trouve, remplacez-la aux deux
-   endroits (`https://…` et `wss://…`, ce dernier pour le temps réel), sans quoi
-   le navigateur bloquera silencieusement tous les appels. Cette politique est
-   ce qui rend acceptable le stockage des jetons de session dans `localStorage`,
-   seule option d'une SPA statique : même un XSS venu d'une dépendance
-   compromise n'aurait aucune destination autorisée vers laquelle les exfiltrer.
+   **La CSP se génère toute seule.** Il n'y a plus rien à reporter à la main :
+   `securityHeaders()`, dans [`vite.config.ts`](vite.config.ts), lit
+   `VITE_SUPABASE_URL` au moment de la compilation et en dérive la directive
+   `connect-src` (en `https://` et en `wss://`, ce dernier pour le temps réel).
+   L'hôte était auparavant écrit en dur dans `index.html` : un déploiement vers
+   un autre projet Supabase bloquait alors **silencieusement** tous les appels
+   réseau, sans autre symptôme qu'une application qui semble en panne.
 
-   Deux protections ne peuvent **pas** passer par une balise `<meta>` et
-   demandent un en-tête HTTP côté hébergeur — à ajouter si le vôtre le permet :
+   Le même plugin écrit `dist/_headers`, qui porte les protections qu'une balise
+   `<meta>` ne peut pas transmettre — le navigateur les ignore : `frame-ancestors
+   'none'` et `Strict-Transport-Security`. **Netlify** et **Cloudflare Pages**
+   lisent ce fichier tel quel.
 
-   ```
-   Content-Security-Policy: frame-ancestors 'none'   # ou X-Frame-Options: DENY
-   Strict-Transport-Security: max-age=31536000; includeSubDomains
-   ```
+   **Vercel, lui, ne lit pas `_headers`** — il l'ignore sans rien signaler, et
+   les en-têtes de sécurité disparaîtraient en silence. C'est
+   [`vercel.json`](vercel.json), à la racine, qui joue ce rôle : il reprend les
+   mêmes directives, plus le `Cache-Control` du service worker et la réécriture
+   SPA. Sur `nginx` (`add_header`) ou Apache (`Header set`), recopiez le contenu
+   de `dist/_headers` dans la configuration correspondante.
 
-   Le mieux reste de servir **toute** la CSP en en-tête et de retirer la balise.
+   La CSP réduit fortement ce que vaut un XSS, mais **ne l'annule pas** : elle
+   ne contraint pas la navigation, et un script injecté peut encore emporter un
+   jeton dans une URL en quittant la page. Les jetons dans `localStorage` sont
+   la contrainte d'une SPA statique, pas un choix confortable ; ce qui protège
+   réellement les données reste la RLS et la séparation des deux identités Auth.
 4. **Désactiver la confirmation par e-mail** (Authentication → Providers →
    Email). Exiger un clic de confirmation rend l'inscription impraticable pour
-   un trésorier qui a un numéro de téléphone mais pas d'habitude du courriel ;
-   la réinitialisation de mot de passe passe donc par la console plateforme.
+   un trésorier qui a un numéro de téléphone mais pas d'habitude du courriel.
+
+   **Conséquence à connaître :** les adresses ne sont donc jamais vérifiées.
+   L'adresse du compte Trésorier est pour cette raison dérivée de
+   l'identifiant de l'association (`…+tresorier.<8 car.>@…`) et non du seul mot
+   « trésorier » : la forme devinable permettait de **préempter** l'adresse
+   qu'une association allait utiliser, ce qui rendait ensuite son rôle
+   Trésorier définitivement inatteignable.
+
+   Pour la même raison, **n'activez pas la réinitialisation de mot de passe par
+   e-mail** en l'état : les liens partiraient vers des adresses jamais
+   vérifiées. Il n'existe aujourd'hui aucun flux de réinitialisation, et la
+   perte du mot de passe du compte exige une intervention dans Authentication →
+   Users.
+
+   **Enfin, abaissez les quotas d'inscription** (Authentication → Rate Limits)
+   et activez la protection anti-abus (CAPTCHA) sur l'inscription. Chaque compte
+   créé ouvre un essai de 30 jours : sans plafond, un remplissage automatisé
+   noie la console d'administration et consomme le quota de la base, qui est
+   commun à toutes les associations.
 5. **Désigner l'administrateur plateforme.** C'est le compte qui gère les
    abonnements depuis `/admin`. Il est **distinct** d'un compte d'association :
    ne le créez pas via « Créer mon association » sur le site.
@@ -147,6 +198,91 @@ le projet Supabase branché.
 
    Cette étape est volontairement manuelle : si `/admin` pouvait s'attribuer le
    rôle, le premier visiteur prendrait la main sur toute la plateforme.
+
+## Déploiement sur Vercel
+
+1. **Importer le dépôt** sur vercel.com. Le préréglage *Vite* est détecté seul :
+   commande `npm run build`, dossier de sortie `dist`.
+2. **Déclarer les deux variables d'environnement** (Settings → Environment
+   Variables), pour *Production* **et** *Preview* :
+
+   ```
+   VITE_SUPABASE_URL              https://<votre-projet>.supabase.co
+   VITE_SUPABASE_PUBLISHABLE_KEY  sb_publishable_…
+   ```
+
+   **Cette étape n'est pas optionnelle, et son oubli ne ressemble pas à un
+   oubli.** Ces variables sont lues *à la compilation* : sans elles, le build
+   réussit, le déploiement réussit — et le site affiche l'écran « Configuration
+   incomplète », tandis que la CSP générée ne cite aucun hôte Supabase et
+   bloquerait de toute façon chaque appel réseau. Après les avoir ajoutées,
+   **relancez un déploiement** : Vercel ne recompile pas tout seul sur un
+   changement de variable.
+3. **Vérifier après le premier déploiement**, dans l'onglet Réseau du
+   navigateur, sur la réponse du document HTML :
+   - `content-security-policy: frame-ancestors 'none'` et
+     `strict-transport-security` sont présents → [`vercel.json`](vercel.json)
+     est bien pris en compte ;
+   - ouvrir directement `https://…/app/membres` dans un onglet neuf renvoie
+     l'application et non un 404 → la réécriture SPA fonctionne ;
+   - la balise `<meta http-equiv="Content-Security-Policy">` du HTML cite votre
+     hôte Supabase en `https://` **et** en `wss://` → les variables étaient bien
+     présentes à la compilation.
+
+   Si le temps réel ne fonctionne pas alors que le reste marche, c'est presque
+   toujours le `wss://` manquant dans `connect-src`, donc l'étape 2 faite après
+   le build.
+
+**Ordre de déploiement.** La base et le code doivent avancer ensemble. La
+migration `0005` exige le rôle Trésorier pour lire `treasurer_secrets` ; un code
+antérieur, qui lisait cette table avec la session du bureau, recevrait un
+condensat vide et **refuserait tous les mots de passe Trésorier** — avec pour
+seul symptôme un « Mot de passe Trésorier incorrect » parfaitement trompeur.
+Déployez le code d'abord, la migration ensuite, ou les deux dans la même
+fenêtre de maintenance.
+
+## Supervision
+
+Il n'existe aucune couche serveur entre le navigateur et Postgres : la RLS
+garantit qu'aucune association ne voit les données d'une autre, mais le **quota
+de la base est commun**. Une seule association peut donc, par une requête
+forgée, saturer la base et interrompre le service pour toutes les autres. Les
+bornes de colonnes de `0002` §9 et `0005` §4 coupent le vecteur le plus direct ;
+ces trois requêtes détectent le reste. À passer une fois par mois.
+
+```sql
+-- 1. Volume de justificatifs par association. Le bucket plafonne chaque objet
+--    à 1 Mo, mais pas leur NOMBRE : c'est le total qui compte.
+select (storage.foldername(name))[1]                     as association_id,
+       count(*)                                          as objets,
+       pg_size_pretty(sum((metadata->>'size')::bigint))  as volume
+  from storage.objects
+ where bucket_id = 'receipts'
+ group by 1
+ order by sum((metadata->>'size')::bigint) desc
+ limit 20;
+
+-- 2. Vague d'inscriptions automatisées : chaque compte ouvre 30 jours d'essai.
+select date_creation, count(*)
+  from associations
+ group by 1 order by 1 desc limit 30;
+
+-- 3. Poids réel par table, pour repérer une anomalie que les deux premières
+--    requêtes ne montreraient pas.
+select relname as table,
+       pg_size_pretty(pg_total_relation_size(c.oid)) as taille
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relkind = 'r'
+ order by pg_total_relation_size(c.oid) desc;
+```
+
+Le type MIME des justificatifs reste **déclaré par le client** : Supabase
+Storage applique la valeur annoncée, pas le contenu réel. Un client forgé peut
+donc stocker jusqu'à 1 Mo d'octets quelconques étiquetés `image/jpeg`. Le risque
+est assumé — bucket privé, dépôt réservé au Trésorier d'un abonnement actif,
+isolation par locataire, et relecture dans une balise `<img>` où tout contenu
+non-image est inerte. C'est la requête n°1 qui le surveille, pas un contrôle de
+signature qui exigerait une fonction de bord.
 
 ## Prise en main
 

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import type { Campaign, PaymentMethod } from '@/lib/types'
 import { PAYMENT_METHODS, paymentMethodLabel } from '@/lib/types'
+import { LIMITS } from '@/lib/limits'
 import { useDB } from '@/lib/store'
 import { useToast } from '@/components/Toast'
 import { campaignRaised } from '@/lib/selectors'
@@ -309,6 +310,7 @@ function CampaignForm({
         >
           <Input
             value={form.title}
+            maxLength={LIMITS.campagneTitre}
             onChange={(e) => setForm({ ...form, title: e.target.value })}
             placeholder="Dîner-gala annuel 2026"
             autoFocus
@@ -318,6 +320,7 @@ function CampaignForm({
         <Field label="Description" hint="Objet de la collecte, décision de l'AG, bénéficiaire…">
           <Textarea
             value={form.description}
+            maxLength={LIMITS.campagneDescription}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
             placeholder="Location de la salle, traiteur et animation pour la soirée de fin d'année."
           />

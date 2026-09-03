@@ -5,36 +5,20 @@
 
     <!-- Les jetons de session Supabase vivent dans localStorage : sur une SPA
          statique, sans serveur à nous, le cookie httpOnly n'est pas une option.
-         Ce qui rend ce choix tenable, c'est cette politique : même un XSS venu
-         d'une dépendance compromise n'aurait aucune destination autorisée vers
-         laquelle exfiltrer un jeton de rafraîchissement.
+         Cette politique réduit fortement ce que vaut un XSS — mais elle ne
+         l'annule pas : la CSP ne contraint PAS la navigation, et un script
+         injecté peut encore emporter un jeton dans une URL en quittant la page.
+         Le durcissement réel est ailleurs (RLS, session Trésorier distincte).
 
-         `connect-src` doit citer le projet Supabase — remplacez l'hôte
-         ci-dessous par celui de VITE_SUPABASE_URL, en HTTPS et en WSS (temps
-         réel). `img-src data: blob:` est indispensable : logos et reçus sont
-         des data URL. `'unsafe-inline'` sur style-src est exigé par Tailwind ;
-         script-src, lui, reste strict — c'est celui qui compte ici.
+         Le contenu est GÉNÉRÉ à la compilation depuis VITE_SUPABASE_URL — voir
+         `securityHeaders()` dans vite.config.ts. L'hôte n'est plus écrit en
+         dur : un déploiement vers un autre projet Supabase bloquait
+         silencieusement tous les appels réseau.
 
-         `frame-ancestors` est volontairement ABSENT : le navigateur l'ignore
-         dans une balise <meta> et se contente d'écrire une erreur en console à
-         chaque chargement, ce qui masquerait les vraies. La protection contre
-         l'inclusion en iframe passe donc par un en-tête HTTP de l'hébergeur —
-         `Content-Security-Policy: frame-ancestors 'none'` ou, à défaut,
-         `X-Frame-Options: DENY`. Voir le README. -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self';
-               script-src 'self';
-               style-src 'self' 'unsafe-inline';
-               img-src 'self' data: blob:;
-               font-src 'self';
-               connect-src 'self' https://gvnxducufocfhekcmwmk.supabase.co wss://gvnxducufocfhekcmwmk.supabase.co;
-               worker-src 'self' blob:;
-               manifest-src 'self';
-               base-uri 'self';
-               form-action 'self';
-               object-src 'none'"
-    />
+         Deux protections ne peuvent pas voyager dans une balise <meta> — le
+         navigateur les ignore — et sont émises dans `dist/_headers` :
+         `frame-ancestors 'none'` et `Strict-Transport-Security`. -->
+    <meta http-equiv="Content-Security-Policy" content="__CSP__" />
     <meta http-equiv="X-Content-Type-Options" content="nosniff" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 

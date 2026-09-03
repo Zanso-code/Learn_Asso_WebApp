@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import type { Category, Member } from '@/lib/types'
+import { LIMITS } from '@/lib/limits'
 import { useDB } from '@/lib/store'
 import { useToast } from '@/components/Toast'
 import { MemberStatementModal } from '@/components/MemberStatement'
@@ -445,6 +446,7 @@ function MemberForm({
         <Field label="Nom complet" required error={nameError}>
           <Input
             value={form.fullName}
+            maxLength={LIMITS.membreNom}
             onChange={(e) => setForm({ ...form, fullName: e.target.value })}
             placeholder="Aminata Ouédraogo"
             autoFocus
@@ -474,6 +476,7 @@ function MemberForm({
             </Select>
             <Input
               value={form.phone}
+              maxLength={LIMITS.membreTelephone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
               placeholder="70 12 45 89"
               inputMode="tel"
@@ -568,6 +571,7 @@ function CategoriesModal({ open, onClose }: { open: boolean; onClose: () => void
             <CommitInput
               value={c.name}
               onCommit={(next) => store.updateCategory(c.id, { name: next })}
+              maxLength={LIMITS.categorieNom}
               className="min-w-0 flex-1"
               aria-label="Nom de la catégorie"
             />
@@ -606,6 +610,7 @@ function CategoriesModal({ open, onClose }: { open: boolean; onClose: () => void
         <div className="flex flex-wrap items-center gap-2">
           <Input
             value={draft.name}
+            maxLength={LIMITS.categorieNom}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             placeholder="Ex. Sympathisant"
             className="min-w-0 flex-1"

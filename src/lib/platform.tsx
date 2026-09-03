@@ -46,10 +46,10 @@ import type {
   StoredSession,
   SubscriptionStatus,
 } from './types'
-import { hashPassword, verifyPassword, type Secret } from './auth'
+import { hasSecret, hashPassword, verifyPassword, type Secret } from './auth'
 import { SESSION_KEY, UNLOCK_ATTEMPTS_KEY, readJSON, removeKey, writeJSON } from './storage'
 import { isOfflineError, setTresorierArme, supabase, supabaseTresorier } from './supabase'
-import { idbGet, idbPut } from './idb'
+import { idbDelete, idbGet, idbPut } from './idb'
 import { defaultCategories } from './seed'
 import { toRow } from './sync/mapping'
 import { currentPeriod } from './format'
@@ -82,12 +82,40 @@ function accountCacheKey(id: string): string {
  * Adresse du compte Tresorier, derivee de celle du compte de l'association.
  *
  * Le formulaire ne demande qu'un e-mail, et il en faut deux : le sous-adressage
- * `+tresorier` en fabrique un second, unique par compte (les adresses de
- * `auth.users` le sont deja) et delivre a la meme boite.
+ * en fabrique un second, unique par compte (les adresses de `auth.users` le
+ * sont deja) et delivre a la meme boite. Cette adresse ne recoit aucun
+ * courriel — la confirmation etant desactivee, elle ne sert qu'a identifier le
+ * compte aupres de GoTrue.
+ *
+ * Le suffixe porte les huit premiers caracteres de l'identifiant de
+ * l'association, et non le seul mot « tresorier ». La forme devinable
+ * permettait de PREEMPTER l'adresse : un attaquant qui connaissait l'e-mail
+ * qu'une association s'appretait a utiliser inscrivait d'abord
+ * `bureau+tresorier@…`, et l'inscription de la victime echouait ensuite sur
+ * « adresse deja utilisee » — laissant `treasurer_user_id` a NULL et le role
+ * Tresorier definitivement inatteignable. L'identifiant est un UUID tire par
+ * la base a l'insertion : il n'est connu qu'apres coup, donc impossible a
+ * preempter.
  */
-export function treasurerEmail(accountEmail: string): string {
+export function treasurerEmail(accountEmail: string, associationId: string): string {
   // Minuscules : GoTrue normalise les adresses qu'il stocke, et cette fonction
   // sert aussi à comparer une session existante à celle attendue.
+  const normalised = accountEmail.trim().toLowerCase()
+  const tag = `tresorier.${associationId.slice(0, 8).toLowerCase()}`
+  const at = normalised.lastIndexOf('@')
+  if (at <= 0) return `${tag}.${normalised}`
+  return `${normalised.slice(0, at)}+${tag}${normalised.slice(at)}`
+}
+
+/**
+ * L'ancienne forme, devinable, conservee en REPLI de connexion.
+ *
+ * Les tresoriers inscrits avant le durcissement portent cette adresse dans
+ * `auth.users`, et rien ne la renomme : la changer exigerait la cle de
+ * service. On tente donc la forme courante, puis celle-ci. Les nouveaux
+ * comptes n'utilisent que la premiere.
+ */
+export function legacyTreasurerEmail(accountEmail: string): string {
   const normalised = accountEmail.trim().toLowerCase()
   const at = normalised.lastIndexOf('@')
   if (at <= 0) return `tresorier.${normalised}`
@@ -248,7 +276,17 @@ interface PlatformValue {
   createAccount: (input: NewAccountInput) => Promise<AssociationAccount>
   /** Renvoie un message d'erreur en français, ou null si la connexion a réussi. */
   login: (email: string, password: string) => Promise<string | null>
-  logout: () => Promise<void>
+  /**
+   * Renvoie le nombre d'opérations non synchronisées conservées sur l'appareil.
+   * Zéro signifie que le miroir local a bien été effacé.
+   */
+  logout: () => Promise<number>
+  /**
+   * Efface sans condition le miroir local de l'association connectée — grand
+   * livre, photos de justificatifs, file d'attente — puis déconnecte.
+   * Destructif : les écritures en attente sont perdues.
+   */
+  purgeDevice: () => Promise<void>
 
   /** Renvoie un message d'erreur en français, ou null si le rôle est ouvert. */
   unlockTreasurer: (password: string) => Promise<string | null>
@@ -335,24 +373,38 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     [cacheAccount],
   )
 
-  /** Fiche de l'association connectée, secret Trésorier compris. */
-  const fetchOwnAccount = useCallback(async (): Promise<AssociationAccount | null> => {
-    const { data, error } = await supabase
-      .from('associations')
-      .select(ACCOUNT_COLUMNS)
-      .maybeSingle()
-    if (error || !data) return null
+  /**
+   * Fiche de l'association connectée.
+   *
+   * Le condensat Trésorier n'est plus demandé avec la session du bureau : la
+   * politique `treasurer_secrets_select` exige désormais `can_write()`, donc le
+   * rôle Trésorier. Il est lu par `supabaseTresorier`, qui ne rend une ligne
+   * que si une session Trésorier existe déjà sur cet appareil — ce qui est
+   * exactement le cas où ce condensat sert, à savoir le déverrouillage hors
+   * ligne des ouvertures suivantes.
+   *
+   * `fallback` préserve le condensat déjà en cache : une ouverture faite alors
+   * que la session Trésorier a expiré ne doit pas effacer ce qui permettra le
+   * prochain déverrouillage sans réseau.
+   */
+  const fetchOwnAccount = useCallback(
+    async (fallback: Secret = EMPTY_SECRET): Promise<AssociationAccount | null> => {
+      const { data, error } = await supabase
+        .from('associations')
+        .select(ACCOUNT_COLUMNS)
+        .maybeSingle()
+      if (error || !data) return null
 
-    // Table séparée : l'Admin Plateforme lisait auparavant le condensat
-    // Trésorier de chaque association en même temps que sa fiche.
-    const { data: secretRow } = await supabase
-      .from('treasurer_secrets')
-      .select('secret')
-      .maybeSingle()
+      const { data: secretRow } = await supabaseTresorier
+        .from('treasurer_secrets')
+        .select('secret')
+        .maybeSingle()
 
-    const secret = (secretRow?.secret ?? EMPTY_SECRET) as Secret
-    return rowToAccount(data as Record<string, unknown>, secret)
-  }, [])
+      const fresh = secretRow?.secret as Secret | undefined
+      return rowToAccount(data as Record<string, unknown>, hasSecret(fresh) ? fresh! : fallback)
+    },
+    [],
+  )
 
   /* -------------------------------------------------------------- console
    *
@@ -544,7 +596,17 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       const local = readStoredSession()
       if (local) setSession({ associationId: local.associationId, role: 'viewer' })
 
-      const fresh = await fetchOwnAccount()
+      // La fiche en cache est lue AVANT l'appel réseau, pour son condensat
+      // Trésorier : la ligne `treasurer_secrets` n'est désormais lisible que
+      // par une session Trésorier, et celle-ci peut avoir expiré. Sans ce
+      // repli, une simple ouverture en ligne effacerait ce qui permet le
+      // prochain déverrouillage sans réseau.
+      const cached = local
+        ? await idbGet<AssociationAccount>('meta', accountCacheKey(local.associationId))
+        : undefined
+      if (cancelled) return
+
+      const fresh = await fetchOwnAccount(cached?.secretTresorier ?? EMPTY_SECRET)
       if (cancelled) return
 
       if (fresh) {
@@ -552,8 +614,6 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         persistSession({ associationId: fresh.id, role: 'viewer' })
       } else if (local) {
         // Hors ligne : on repart de la fiche mise en cache au dernier passage.
-        const cached = await idbGet<AssociationAccount>('meta', accountCacheKey(local.associationId))
-        if (cancelled) return
         if (cached) cacheAccount(cached)
         else {
           // Ni réseau ni cache, ou association supprimée côté serveur.
@@ -584,19 +644,49 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       target: AssociationAccount,
       password: string,
     ): Promise<string | null> {
-      // Session déjà persistée sur cet appareil : c'est ce qui rend le
-      // déverrouillage possible en réunion, sans réseau.
       const { data: existing } = await supabaseTresorier.auth.getSession()
-      if (existing.session) return null
 
+      // Hors ligne, la session persistée est la SEULE preuve disponible : c'est
+      // le compromis assumé du déverrouillage en réunion, adossé à la garde
+      // PBKDF2 locale de `unlockTreasurer`.
+      //
+      // En ligne, elle ne suffit plus. Elle suffisait, et c'était une faille :
+      // la session survit indéfiniment (`persistSession` + `autoRefreshToken`)
+      // et `lockTreasurer` ne la ferme pas, si bien qu'après le tout premier
+      // déverrouillage plus aucun déverrouillage ne consultait le serveur.
+      // Ne restait alors que la comparaison locale, sans la limitation de
+      // fréquence de GoTrue, et avec pour seul frein un compteur rangé dans
+      // localStorage — donc du côté de l'attaquant, et effaçable.
+      //
+      // Redemander au serveur ne coûte qu'un rafraîchissement de session quand
+      // le mot de passe est le bon.
       if (!navigator.onLine) {
-        return "Premier déverrouillage sur cet appareil : connectez-vous à Internet une fois, puis réessayez."
+        return existing.session
+          ? null
+          : "Premier déverrouillage sur cet appareil : connectez-vous à Internet une fois, puis réessayez."
       }
 
-      const email = treasurerEmail(target.email)
+      const email = treasurerEmail(target.email, target.id)
 
-      const { data: signIn, error: signInError } =
+      let { data: signIn, error: signInError } =
         await supabaseTresorier.auth.signInWithPassword({ email, password })
+
+      // Trésorier inscrit avant le changement de dérivation : son compte porte
+      // encore l'ancienne adresse, et rien ne peut la renommer sans la clé de
+      // service. On retente donc sous l'ancienne forme.
+      if (signInError && !isOfflineError(signInError)) {
+        const legacy = legacyTreasurerEmail(target.email)
+        if (legacy !== email) {
+          const retry = await supabaseTresorier.auth.signInWithPassword({
+            email: legacy,
+            password,
+          })
+          if (!retry.error) {
+            signIn = retry.data
+            signInError = null
+          }
+        }
+      }
 
       if (!signInError && signIn.session && signIn.user) {
         // Fiche antérieure à la migration : le compte existe, le lien manque.
@@ -694,17 +784,32 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         if (secretError) throw new Error(authMessage(secretError))
 
         // Identité Trésorier : le compte qui portera toutes les écritures.
-        const email = treasurerEmail(input.email)
+        // L'adresse est dérivée de `associationId`, un UUID que la base vient
+        // seulement de tirer : contrairement à l'ancien suffixe `+tresorier`,
+        // elle ne peut pas avoir été préemptée par un tiers.
+        const email = treasurerEmail(input.email, associationId)
         const { data: tresoSignUp, error: tresoError } = await supabaseTresorier.auth.signUp({
           email,
           password: input.motDePasseTresorier,
         })
+
+        // L'association, elle, EXISTE déjà. Un message qui n'annonce qu'un
+        // échec laisserait le fondateur tout recommencer — et la seconde
+        // inscription échouerait sur « e-mail déjà utilisé », sans issue. Le
+        // rôle Trésorier, lui, se rattrape au premier déverrouillage :
+        // `openTreasurerSession` recrée l'identité manquante et la relie.
+        const rattrapage =
+          " Votre association a bien été créée : connectez-vous, puis activez le rôle Trésorier depuis le bouton « Président / Secrétaire » de l'en-tête."
+
         if (tresoError || !tresoSignUp.user) {
-          throw new Error(authMessage(tresoError ?? 'Création du rôle Trésorier impossible'))
+          throw new Error(
+            authMessage(tresoError ?? 'Création du rôle Trésorier impossible') + rattrapage,
+          )
         }
         if (!tresoSignUp.session) {
           throw new Error(
-            "Le compte Trésorier attend une confirmation par e-mail. Désactivez « Confirm email » dans Supabase (Authentication → Providers → Email).",
+            "Le compte Trésorier attend une confirmation par e-mail. Désactivez « Confirm email » dans Supabase (Authentication → Providers → Email)." +
+              rattrapage,
           )
         }
 
@@ -743,12 +848,26 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           return "Ce compte n'est rattaché à aucune association."
         }
 
+        // Reconnexion du même compte sur un appareil déjà utilisé : le
+        // condensat mis en cache reste valable, et c'est lui qui autorisera le
+        // déverrouillage hors ligne. Le serveur ne le rendra plus tant qu'une
+        // session Trésorier n'est pas ouverte.
+        if (!hasSecret(fresh.secretTresorier)) {
+          const cached = await idbGet<AssociationAccount>('meta', accountCacheKey(fresh.id))
+          if (hasSecret(cached?.secretTresorier)) {
+            fresh.secretTresorier = cached!.secretTresorier
+          }
+        }
+
         // Une session Trésorier laissée par une AUTRE association sur cet
         // appareil doit partir : la RLS refuserait de toute façon ses
-        // écritures, mais mieux vaut ne pas la laisser traîner.
+        // écritures, mais mieux vaut ne pas la laisser traîner. Les deux formes
+        // d'adresse sont acceptées — un trésorier antérieur au changement de
+        // dérivation porte encore l'ancienne, et sa session est légitime.
         const { data: leftover } = await supabaseTresorier.auth.getSession()
-        const expected = treasurerEmail(fresh.email)
-        if ((leftover.session?.user.email ?? '').toLowerCase() !== expected) {
+        const attendues = [treasurerEmail(fresh.email, fresh.id), legacyTreasurerEmail(fresh.email)]
+        const ouverte = (leftover.session?.user.email ?? '').toLowerCase()
+        if (!attendues.includes(ouverte)) {
           await supabaseTresorier.auth.signOut().catch(() => {})
         }
 
@@ -761,12 +880,19 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
       logout: async () => {
         const id = session?.associationId
+        let retained = 0
         if (id) {
           // Ne jamais jeter du travail non synchronisé : s'il reste des
           // opérations en attente, le miroir local est conservé pour que la
           // prochaine connexion du même compte les retrouve et les envoie.
-          const remaining = await pendingCount(id).catch(() => 0)
-          if (remaining === 0) {
+          //
+          // L'arbitrage est le bon, mais il a une conséquence que l'utilisateur
+          // doit connaître : sur un appareil prêté, le grand livre entier —
+          // noms, téléphones, montants, arriérés, photos de reçus — reste en
+          // clair dans IndexedDB. D'où le compte rendu renvoyé à l'appelant, et
+          // `purgeDevice` pour ceux qui préfèrent tout effacer.
+          retained = await pendingCount(id).catch(() => 0)
+          if (retained === 0) {
             await clearLedger(id).catch(() => {})
             await forgetLocalReceipts(id).catch(() => {})
           }
@@ -774,6 +900,23 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         // Les deux sessions partent : en laisser une derrière soi sur un
         // appareil partagé rendrait le prochain déverrouillage possible sans
         // réseau, donc sans le moindre contrôle serveur.
+        setTresorierArme(false)
+        await supabaseTresorier.auth.signOut().catch(() => {})
+        await supabase.auth.signOut()
+        persistSession(null)
+        setAccount(null)
+        accountRef.current = null
+        return retained
+      },
+
+      purgeDevice: async () => {
+        const id = accountRef.current?.id ?? session?.associationId
+        if (id) {
+          await clearFor(id).catch(() => {})
+          await clearLedger(id).catch(() => {})
+          await forgetLocalReceipts(id).catch(() => {})
+          await idbDelete('meta', accountCacheKey(id)).catch(() => {})
+        }
         setTresorierArme(false)
         await supabaseTresorier.auth.signOut().catch(() => {})
         await supabase.auth.signOut()
@@ -803,7 +946,16 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         // 1. Garde locale : reconnaît le mot de passe sans réseau. Elle ne
         //    donne aucun droit à elle seule — elle évite juste un aller-retour
         //    serveur inutile et permet le cas hors ligne.
-        if (!(await verifyPassword(password, current.secretTresorier))) {
+        //
+        //    Elle ne s'applique que si un condensat est réellement en cache.
+        //    Depuis que sa lecture exige le rôle Trésorier, un appareil qui n'a
+        //    encore jamais ouvert de session Trésorier n'en a aucun : refuser
+        //    d'emblée rendrait le tout premier déverrouillage impossible. Dans
+        //    ce cas, c'est le serveur qui tranche, juste en dessous.
+        if (
+          hasSecret(current.secretTresorier) &&
+          !(await verifyPassword(password, current.secretTresorier))
+        ) {
           writeJSON(UNLOCK_ATTEMPTS_KEY, failed + 1)
           return 'Mot de passe Trésorier incorrect.'
         }
@@ -821,6 +973,20 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
         removeKey(UNLOCK_ATTEMPTS_KEY)
         armTresorier(true)
+
+        // La session Trésorier vient de s'ouvrir : c'est le seul moment où la
+        // RLS laisse lire le condensat. On le met en cache pour que les
+        // ouvertures suivantes puissent se déverrouiller sans réseau — le
+        // condensat ne transite plus jamais par la session du bureau.
+        if (!hasSecret(current.secretTresorier)) {
+          const { data: secretRow } = await supabaseTresorier
+            .from('treasurer_secrets')
+            .select('secret')
+            .maybeSingle()
+          const secret = secretRow?.secret as Secret | undefined
+          if (hasSecret(secret)) cacheAccount({ ...current, secretTresorier: secret! })
+        }
+
         return null
       },
 

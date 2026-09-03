@@ -13,6 +13,7 @@ import {
   Users,
   Wallet,
 } from 'lucide-react'
+import { LIMITS } from '@/lib/limits'
 import { usePlatform } from '@/lib/platform'
 import { useToast } from '@/components/Toast'
 import { passwordProblem } from '@/lib/auth'
@@ -383,6 +384,7 @@ function CreateAssociationModal({
           <Field label="Nom de l'association" required>
             <Input
               value={nom}
+              maxLength={LIMITS.associationNom}
               onChange={(e) => {
                 setNom(e.target.value)
                 setError('')
@@ -392,7 +394,12 @@ function CreateAssociationModal({
             />
           </Field>
           <Field label="Sigle" hint="Affiché dans l'en-tête et sur le rapport d'AG.">
-            <Input value={sigle} onChange={(e) => setSigle(e.target.value)} placeholder="AAL 2012" />
+            <Input
+              value={sigle}
+              onChange={(e) => setSigle(e.target.value)}
+              maxLength={LIMITS.associationSigle}
+              placeholder="AAL 2012"
+            />
           </Field>
         </div>
 
@@ -402,7 +409,12 @@ function CreateAssociationModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Ville">
-            <Input value={ville} onChange={(e) => setVille(e.target.value)} placeholder="Ouagadougou" />
+            <Input
+              value={ville}
+              onChange={(e) => setVille(e.target.value)}
+              maxLength={LIMITS.associationVille}
+              placeholder="Ouagadougou"
+            />
           </Field>
           <Field label="Pays">
             <Select value={pays} onChange={(e) => setPays(e.target.value)}>
@@ -419,6 +431,7 @@ function CreateAssociationModal({
           <Field label="Responsable" hint="Personne à contacter pour l'abonnement.">
             <Input
               value={responsable}
+              maxLength={LIMITS.associationResponsable}
               onChange={(e) => setResponsable(e.target.value)}
               placeholder="Salif Compaoré"
             />
@@ -427,6 +440,7 @@ function CreateAssociationModal({
             <Input
               type="email"
               value={email}
+              maxLength={LIMITS.associationEmail}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="tresorier@exemple.bf"
             />
@@ -444,6 +458,7 @@ function CreateAssociationModal({
           <Field label="Téléphone / WhatsApp">
             <Input
               value={telephone}
+              maxLength={LIMITS.associationTelephone}
               onChange={(e) => setTelephone(e.target.value)}
               inputMode="tel"
               placeholder="70 12 45 89"
