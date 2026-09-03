@@ -20,6 +20,10 @@ dist-ssr
 
 *.local
 
+# Agent / MCP configs with secrets
+.agents/mcp_config.json
+
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
