@@ -1,21 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-
-  "_comment_headers": [
-    "Vercel ne lit PAS le fichier dist/_headers (format Netlify / Cloudflare Pages)",
-    "que genere vite.config.ts. Ce fichier-ci est son equivalent.",
-    "",
-    "Il ne reprend QUE les directives qu'une balise <meta> ne peut pas porter — le",
-    "navigateur les ignore silencieusement dans une meta. Le reste de la CSP",
-    "(connect-src, script-src...) reste genere a la compilation depuis",
-    "VITE_SUPABASE_URL et injecte dans index.html : le dupliquer ici recreerait",
-    "exactement le probleme d'hote ecrit en dur que la generation a supprime.",
-    "",
-    "Aucune valeur ci-dessous ne depend du projet Supabase : rien ne peut deriver.",
-    "Les deux politiques CSP coexistent — le navigateur les applique en",
-    "intersection, chacune restreignant ce qu'elle nomme."
-  ],
-
   "headers": [
     {
       "source": "/(.*)",
@@ -35,29 +19,12 @@
         { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }
       ]
     },
-
     {
-      "_comment": [
-        "Le service worker ne doit jamais etre servi depuis un cache : une",
-        "version perimee continuerait a servir l'ancienne coquille applicative",
-        "apres un deploiement, et l'utilisateur resterait bloque sur du code",
-        "obsolete sans aucun moyen de s'en apercevoir.",
-        "Les fichiers de dist/assets/ portent un hash dans leur nom : eux",
-        "peuvent etre caches indefiniment, ce que Vercel fait deja."
-      ],
       "source": "/(sw.js|registerSW.js|manifest.webmanifest)",
-      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
     }
-  ],
-
-  "_comment_rewrites": [
-    "SPA : /app/membres, /admin, /contact n'existent pas sur le disque, c'est",
-    "React Router qui les resout. Vercel verifie le systeme de fichiers AVANT",
-    "d'appliquer les rewrites, donc les assets, sw.js et les polices sont servis",
-    "normalement et seules les vraies routes applicatives retombent sur la",
-    "coquille. A verifier apres le premier deploiement en ouvrant directement",
-    "/app/membres dans un onglet neuf : un 404 signifierait que cette regle",
-    "n'est pas prise en compte."
   ],
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }

@@ -233,6 +233,23 @@ le projet Supabase branché.
    toujours le `wss://` manquant dans `connect-src`, donc l'étape 2 faite après
    le build.
 
+**Pourquoi `vercel.json` ne contient aucun commentaire.** Vercel valide ce
+fichier contre un schéma strict : toute clé hors schéma — y compris une clé
+`_comment` — fait échouer le déploiement avec `should NOT have additional
+property`. Les deux points qu'on serait tenté d'y annoter tiennent ici :
+
+- `sw.js`, `registerSW.js` et `manifest.webmanifest` sont servis en
+  `must-revalidate`. Un service worker mis en cache continuerait à servir
+  l'ancienne coquille applicative après un déploiement, sans que l'utilisateur
+  puisse s'en apercevoir. Les fichiers de `dist/assets/` portent un hash dans
+  leur nom et restent cachés indéfiniment, ce que Vercel fait déjà.
+- Le `Content-Security-Policy` d'en-tête ne reprend **que** `frame-ancestors`,
+  que la balise `<meta>` ne peut pas porter. Le reste de la CSP
+  (`connect-src`, `script-src`…) est généré à la compilation depuis
+  `VITE_SUPABASE_URL` : le dupliquer ici réintroduirait l'hôte écrit en dur que
+  cette génération a supprimé. Les deux politiques coexistent — le navigateur
+  les applique en intersection, chacune ne restreignant que ce qu'elle nomme.
+
 **Ordre de déploiement.** La base et le code doivent avancer ensemble. La
 migration `0005` exige le rôle Trésorier pour lire `treasurer_secrets` ; un code
 antérieur, qui lisait cette table avec la session du bureau, recevrait un
