@@ -730,6 +730,29 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       }
 
       if (!signInError && signIn.session && signIn.user) {
+        // S'être authentifié ne prouve rien.
+        //
+        // Après un renouvellement d'identité, l'ANCIEN compte répond toujours à
+        // son ancien mot de passe : rien ne le supprime, il a seulement cessé
+        // d'être désigné par `treasurer_user_id`. Et comme le repli ci-dessus
+        // tente justement l'ancienne adresse, ce mot de passe périmé ouvrait
+        // une session — donc armait le rôle Trésorier — sur un compte à qui
+        // `can_write()` répond faux. L'interface montrait les boutons
+        // d'écriture, et chaque enregistrement partait au rebut sans que rien
+        // ne l'explique.
+        //
+        // L'autorité n'est pas la session, c'est `treasurer_user_id`. Le repli
+        // reste ouvert aux associations qui n'ont pas encore renouvelé : leur
+        // ancienne adresse EST l'identité désignée, et la comparaison passe.
+        //
+        // Déconnexion locale seulement : la portée globale révoquerait les
+        // jetons du compte sur tous ses appareils, ce qui n'a pas lieu d'être
+        // pour une simple saisie périmée.
+        if (target.treasurerUserId && signIn.user.id !== target.treasurerUserId) {
+          await supabaseTresorier.auth.signOut({ scope: 'local' }).catch(() => {})
+          return "Ce mot de passe Trésorier n'est plus valide : l'identité a été renouvelée. Utilisez le nouveau mot de passe."
+        }
+
         // Fiche antérieure à la migration : le compte existe, le lien manque.
         if (!target.treasurerUserId) {
           const { error } = await supabase.rpc('set_treasurer_identity', {
@@ -906,10 +929,22 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         // d'adresse sont acceptées — un trésorier antérieur au changement de
         // dérivation porte encore l'ancienne, et sa session est légitime.
         const { data: leftover } = await supabaseTresorier.auth.getSession()
-        const attendues = [treasurerEmail(fresh.email, fresh.id), legacyTreasurerEmail(fresh.email)]
-        const ouverte = (leftover.session?.user.email ?? '').toLowerCase()
-        if (!attendues.includes(ouverte)) {
-          await supabaseTresorier.auth.signOut().catch(() => {})
+        const ouvert = leftover.session?.user
+        if (ouvert) {
+          // Quand l'identité Trésorier est connue, elle tranche seule : c'est
+          // l'identifiant que la RLS interroge, et il reste juste après un
+          // renouvellement là où la comparaison d'adresses, elle, laissait
+          // passer l'ancien compte devenu sans droits. Les deux formes
+          // d'adresse ne servent plus que de repli pour les fiches antérieures
+          // à la migration, dont `treasurer_user_id` est encore vide.
+          const legitime = fresh.treasurerUserId
+            ? ouvert.id === fresh.treasurerUserId
+            : [treasurerEmail(fresh.email, fresh.id), legacyTreasurerEmail(fresh.email)].includes(
+                (ouvert.email ?? '').toLowerCase(),
+              )
+          if (!legitime) {
+            await supabaseTresorier.auth.signOut({ scope: 'local' }).catch(() => {})
+          }
         }
 
         cacheAccount(fresh)
