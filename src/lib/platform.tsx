@@ -48,7 +48,13 @@ import type {
 } from './types'
 import { hasSecret, hashPassword, verifyPassword, type Secret } from './auth'
 import { SESSION_KEY, UNLOCK_ATTEMPTS_KEY, readJSON, removeKey, writeJSON } from './storage'
-import { isOfflineError, setTresorierArme, supabase, supabaseTresorier } from './supabase'
+import {
+  ephemeralClient,
+  isOfflineError,
+  setTresorierArme,
+  supabase,
+  supabaseTresorier,
+} from './supabase'
 import { idbDelete, idbGet, idbPut } from './idb'
 import { defaultCategories } from './seed'
 import { toRow } from './sync/mapping'
@@ -294,6 +300,22 @@ interface PlatformValue {
   changeTreasurerPassword: (current: string, next: string) => Promise<string | null>
   changeAccountPassword: (current: string, next: string) => Promise<string | null>
 
+  /**
+   * Vrai quand l'identite Tresorier ouverte porte encore l'ANCIENNE adresse,
+   * devinable, celle que `legacyTreasurerEmail()` derive.
+   *
+   * Ne vaut que ce que vaut sa source : la session Tresorier elle-meme. Faux
+   * tant que le role n'a pas ete deverrouille au moins une fois — on ne peut
+   * pas lire l'adresse d'une session qui n'est pas ouverte, et `auth.users`
+   * n'est pas interrogeable depuis le navigateur.
+   */
+  treasurerIdentityLegacy: boolean
+  /**
+   * Reporte l'identite Tresorier sur l'adresse canonique, avec un nouveau mot
+   * de passe. Renvoie un message d'erreur en francais, ou null.
+   */
+  rotateTreasurerIdentity: (current: string, next: string) => Promise<string | null>
+
   /** Ligne `associations` fraîche, poussée par le moteur de synchronisation. */
   applyAccountRow: (row: Record<string, unknown>) => void
 
@@ -318,6 +340,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const [comptes, setComptes] = useState<AssociationAccount[]>([])
   const [ready, setReady] = useState(false)
+  const [treasurerIdentityLegacy, setTreasurerIdentityLegacy] = useState(false)
 
   // Les actions asynchrones (login puis lecture de la fiche) peuvent s'enchainer
   // dans le meme tour de boucle ; cette reference leur evite de lire un `account`
@@ -345,6 +368,24 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const armTresorier = useCallback((open: boolean) => {
     setTresorierArme(open)
     setSession((prev) => (prev ? { ...prev, role: open ? 'treasurer' : 'viewer' } : prev))
+  }, [])
+
+  /**
+   * Compare l'adresse de la session Tresorier ouverte a celle que
+   * `treasurerEmail()` derive aujourd'hui.
+   *
+   * C'est le seul moyen de le savoir depuis le navigateur : `auth.users` n'est
+   * pas lisible, et aucune colonne ne conserve l'adresse du tresorier — elle
+   * est TOUJOURS rederivee au deverrouillage. D'ou la condition d'ouverture de
+   * `rotateTreasurerIdentity` : il faut une session pour constater l'ecart.
+   */
+  const refreshTreasurerIdentity = useCallback(async (target: AssociationAccount | null) => {
+    if (!target) return setTreasurerIdentityLegacy(false)
+    const { data } = await supabaseTresorier.auth.getSession()
+    const ouverte = (data.session?.user.email ?? '').toLowerCase()
+    setTreasurerIdentityLegacy(
+      Boolean(ouverte) && ouverte !== treasurerEmail(target.email, target.id),
+    )
   }, [])
 
   const persistSession = useCallback((next: Session | null) => {
@@ -873,6 +914,9 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
         cacheAccount(fresh)
         setTresorierArme(false)
+        // Une session Trésorier légitime a pu survivre au tri ci-dessus : si
+        // elle porte l'ancienne adresse, les Paramètres doivent le savoir.
+        void refreshTreasurerIdentity(fresh)
         // Toujours en lecture seule : le rôle Trésorier a son propre mot de passe.
         persistSession({ associationId: fresh.id, role: 'viewer' })
         return null
@@ -901,6 +945,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         // appareil partagé rendrait le prochain déverrouillage possible sans
         // réseau, donc sans le moindre contrôle serveur.
         setTresorierArme(false)
+        setTreasurerIdentityLegacy(false)
         await supabaseTresorier.auth.signOut().catch(() => {})
         await supabase.auth.signOut()
         persistSession(null)
@@ -918,6 +963,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           await idbDelete('meta', accountCacheKey(id)).catch(() => {})
         }
         setTresorierArme(false)
+        setTreasurerIdentityLegacy(false)
         await supabaseTresorier.auth.signOut().catch(() => {})
         await supabase.auth.signOut()
         persistSession(null)
@@ -973,6 +1019,11 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
         removeKey(UNLOCK_ATTEMPTS_KEY)
         armTresorier(true)
+
+        // La session est ouverte : son adresse est enfin lisible, donc l'écart
+        // avec la forme canonique enfin constatable. C'est ce qui décide de
+        // l'apparition du bouton de renouvellement dans les Paramètres.
+        void refreshTreasurerIdentity(current)
 
         // La session Trésorier vient de s'ouvrir : c'est le seul moment où la
         // RLS laisse lire le condensat. On le met en cache pour que les
@@ -1032,6 +1083,134 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         }
 
         cacheAccount({ ...target, secretTresorier: hashed })
+        return null
+      },
+
+      treasurerIdentityLegacy,
+
+      /**
+       * Reporte le rôle Trésorier sur l'adresse canonique.
+       *
+       * Les trésoriers inscrits avant le durcissement portent l'adresse que
+       * `legacyTreasurerEmail()` dérive — devinable, donc PRÉEMPTABLE : il
+       * suffisait de connaître l'e-mail du compte pour inscrire l'adresse
+       * Trésorier avant l'association. `treasurerEmail()` y ajoute depuis huit
+       * caractères de l'identifiant, un UUID tiré par la base, qui n'est connu
+       * qu'après coup. Rien ne renomme un compte Auth existant sans la clé de
+       * service : la seule sortie est de désigner un NOUVEAU compte, ce que
+       * `rotate_treasurer_identity()` autorise au trésorier en exercice.
+       *
+       * L'ORDRE des quatre étapes n'est pas libre :
+       *
+       *   1. Le condensat d'abord. `treasurer_secrets_update` exige
+       *      `can_write()`, et la passation retire précisément cela au compte
+       *      qui l'exécute : après l'étape 3, l'ancien trésorier ne peut plus
+       *      l'écrire, et le nouveau n'a pas encore de session. C'est donc
+       *      maintenant ou jamais — d'où le retour en arrière si la suite
+       *      échoue, sur le motif de `changeTreasurerPassword`.
+       *   2. L'inscription sur un client JETABLE. `signUp` ouvre une session
+       *      sur le client qui le porte ; la porter sur `supabaseTresorier`
+       *      détruirait la session du trésorier en exercice, seule acceptée à
+       *      l'étape 3.
+       *   3. La passation, portée par la session encore en place.
+       *   4. La nouvelle session enfin, l'ancienne n'ayant plus aucun droit.
+       */
+      rotateTreasurerIdentity: async (current, next) => {
+        const target = accountRef.current
+        if (!target) return 'Aucune association connectée.'
+        if (!navigator.onLine) return 'Renouvellement impossible hors ligne.'
+
+        const { data: open } = await supabaseTresorier.auth.getSession()
+        if (!open.session) return 'Rôle Trésorier verrouillé — déverrouillez-le puis réessayez.'
+
+        const canonique = treasurerEmail(target.email, target.id)
+        if ((open.session.user.email ?? '').toLowerCase() === canonique) {
+          return "L'identité Trésorier est déjà à jour : il n'y a rien à renouveler."
+        }
+
+        // Le mot de passe courant est revérifié bien que la session soit
+        // ouverte : elle peut l'être depuis des heures sur un appareil laissé
+        // sans surveillance, et cette opération évince le trésorier en place.
+        if (
+          hasSecret(target.secretTresorier) &&
+          !(await verifyPassword(current, target.secretTresorier))
+        ) {
+          return 'Mot de passe Trésorier actuel incorrect.'
+        }
+
+        // 1. Le condensat, tant que l'ancien compte a encore `can_write()`.
+        const hashed = await hashPassword(next)
+        const precedent = target.secretTresorier
+        const { error: secretError } = await supabaseTresorier
+          .from('treasurer_secrets')
+          .update({ secret: hashed })
+          .eq('association_id', target.id)
+        if (secretError) return authMessage(secretError)
+
+        const revenirEnArriere = async () => {
+          if (!hasSecret(precedent)) return
+          await supabaseTresorier
+            .from('treasurer_secrets')
+            .update({ secret: precedent })
+            .eq('association_id', target.id)
+            .then(undefined, () => {})
+        }
+
+        // 2. La nouvelle identité, à l'écart des deux sessions en place.
+        const jetable = ephemeralClient()
+        let { data: inscrit, error: inscriptionError } = await jetable.auth.signUp({
+          email: canonique,
+          password: next,
+        })
+
+        // Reprise d'un renouvellement interrompu entre l'étape 2 et l'étape 3 :
+        // le compte existe, la passation n'a pas eu lieu. Se connecter dessus
+        // rend le même identifiant et permet de reprendre là où on en était.
+        // Si l'adresse existe sous un AUTRE mot de passe, la connexion échoue —
+        // et c'est bien un échec, pas un cas à contourner.
+        if (inscriptionError && !isOfflineError(inscriptionError)) {
+          const reprise = await jetable.auth.signInWithPassword({
+            email: canonique,
+            password: next,
+          })
+          if (!reprise.error) {
+            inscrit = reprise.data
+            inscriptionError = null
+          }
+        }
+
+        if (inscriptionError || !inscrit.user) {
+          await revenirEnArriere()
+          return authMessage(
+            inscriptionError ?? "Création de la nouvelle identité Trésorier impossible",
+          )
+        }
+
+        // 3. La passation elle-même, portée par le trésorier en exercice.
+        const { error: passationError } = await supabaseTresorier.rpc(
+          'rotate_treasurer_identity',
+          { new_uid: inscrit.user.id },
+        )
+        if (passationError) {
+          await revenirEnArriere()
+          return authMessage(passationError)
+        }
+
+        // 4. L'ancienne session ne vaut plus rien : `can_write()` suit
+        //    désormais le nouveau compte. Aucun retour en arrière au-delà de ce
+        //    point — le condensat écrit à l'étape 1 est le bon.
+        const { error: sessionError } = await supabaseTresorier.auth.signInWithPassword({
+          email: canonique,
+          password: next,
+        })
+        if (sessionError) {
+          armTresorier(false)
+          return "Identité renouvelée, mais la session n'a pas pu s'ouvrir. Déverrouillez le rôle Trésorier avec le nouveau mot de passe."
+        }
+
+        cacheAccount({ ...target, secretTresorier: hashed })
+        setTreasurerIdentityLegacy(false)
+        armTresorier(true)
         return null
       },
 
@@ -1119,6 +1298,8 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     updateAccount,
     deleteAccount,
     updateContact,
+    treasurerIdentityLegacy,
+    refreshTreasurerIdentity,
   ])
 
   return <PlatformContext.Provider value={value}>{children}</PlatformContext.Provider>

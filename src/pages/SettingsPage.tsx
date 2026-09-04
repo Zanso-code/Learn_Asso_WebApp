@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   KeyRound,
   LifeBuoy,
+  RefreshCw,
   RotateCcw,
   ShieldCheck,
   Smartphone,
@@ -50,6 +51,8 @@ export function SettingsPage() {
     changeTreasurerPassword,
     changeAccountPassword,
     purgeDevice,
+    treasurerIdentityLegacy,
+    rotateTreasurerIdentity,
   } = usePlatform()
   const toast = useToast()
   const navigate = useNavigate()
@@ -69,6 +72,7 @@ export function SettingsPage() {
   }, [confirmPurge, store.associationId])
   const [unlockOpen, setUnlockOpen] = useState(false)
   const [passwordModal, setPasswordModal] = useState<'tresorier' | 'compte' | null>(null)
+  const [rotateOpen, setRotateOpen] = useState(false)
   const [pendingImport, setPendingImport] = useState<DB | null>(null)
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -340,6 +344,32 @@ export function SettingsPage() {
                   Modifier le mot de passe du compte
                 </Button>
               )}
+
+              {/* Ne s'affiche que pour les associations restées sur l'ancienne
+                  adresse Trésorier, et disparaît définitivement une fois le
+                  renouvellement fait — d'où la place en bas de carte plutôt
+                  qu'un réglage permanent. */}
+              {isTreasurer && treasurerIdentityLegacy && (
+                <div className="mt-1 rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+                  <p className="text-sm font-bold text-amber-900">
+                    Identité Trésorier à renouveler
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-800">
+                    Le rôle Trésorier de cette association repose encore sur une adresse technique
+                    créée avant le renforcement de la sécurité. Le renouvellement en met une
+                    nouvelle en place, avec un nouveau mot de passe Trésorier. À faire une fois,
+                    connecté à Internet.
+                  </p>
+                  <Button
+                    variant="outline"
+                    className="mt-3 w-full"
+                    onClick={() => setRotateOpen(true)}
+                  >
+                    <RefreshCw className="size-4" />
+                    Renouveler l'identité Trésorier
+                  </Button>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -435,6 +465,12 @@ export function SettingsPage() {
             ? changeAccountPassword(current, next)
             : changeTreasurerPassword(current, next)
         }
+      />
+
+      <RotateIdentityModal
+        open={rotateOpen}
+        onClose={() => setRotateOpen(false)}
+        onSubmit={rotateTreasurerIdentity}
       />
 
       <Modal
@@ -560,6 +596,121 @@ export function SettingsPage() {
         </p>
       </Modal>
     </>
+  )
+}
+
+/* --------------------------------------------- Treasurer identity rotation */
+
+/**
+ * Renouvellement de l'identité Trésorier.
+ *
+ * Même formulaire qu'un changement de mot de passe, et c'est voulu : du point
+ * de vue du trésorier, l'opération EST un changement de mot de passe. Le
+ * remplacement du compte Auth sous-jacent ne le concerne pas — il n'a jamais vu
+ * l'adresse technique, qui est dérivée et ne reçoit aucun courriel.
+ *
+ * Ce que le texte doit faire passer, en revanche, c'est l'irréversibilité :
+ * l'ancien mot de passe Trésorier cesse de fonctionner sur TOUS les appareils,
+ * y compris ceux qui étaient déverrouillés hors ligne.
+ */
+function RotateIdentityModal({
+  open,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  onClose: () => void
+  onSubmit: (current: string, next: string) => Promise<string | null>
+}) {
+  const toast = useToast()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  function close() {
+    setCurrent('')
+    setNext('')
+    setConfirm('')
+    setError('')
+    onClose()
+  }
+
+  async function submit() {
+    const problem = passwordProblem(next)
+    if (problem) return setError(problem)
+    if (next !== confirm) return setError('Les deux nouveaux mots de passe ne correspondent pas.')
+    setBusy(true)
+    const failed = await onSubmit(current, next)
+    setBusy(false)
+    if (failed) {
+      setError(failed)
+      setCurrent('')
+      return
+    }
+    toast.success('Identité Trésorier renouvelée')
+    close()
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      title="Renouveler l'identité Trésorier"
+      subtitle="À faire une seule fois, connecté à Internet."
+      footer={
+        <>
+          <Button variant="ghost" onClick={close}>
+            Annuler
+          </Button>
+          <Button onClick={submit} disabled={busy || !current || !next}>
+            <RefreshCw className="size-4" />
+            {busy ? 'Renouvellement…' : 'Renouveler'}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <Field label="Mot de passe Trésorier actuel">
+          <PasswordInput
+            value={current}
+            onChange={(e) => {
+              setCurrent(e.target.value)
+              setError('')
+            }}
+            autoComplete="current-password"
+            placeholder="••••••••"
+          />
+        </Field>
+        <Field label="Nouveau mot de passe Trésorier" error={error || undefined}>
+          <PasswordInput
+            value={next}
+            onChange={(e) => {
+              setNext(e.target.value)
+              setError('')
+            }}
+            autoComplete="new-password"
+            placeholder="Lettres et chiffres, 8 caractères minimum"
+          />
+        </Field>
+        <Field label="Confirmer le nouveau mot de passe">
+          <PasswordInput
+            value={confirm}
+            onChange={(e) => {
+              setConfirm(e.target.value)
+              setError('')
+            }}
+            autoComplete="new-password"
+            placeholder="••••••••"
+          />
+        </Field>
+      </div>
+      <p className="mt-3 rounded-xl bg-amber-50 px-3.5 py-3 text-xs leading-relaxed text-amber-800">
+        L'ancien mot de passe Trésorier cessera de fonctionner, <strong>sur tous les appareils</strong>.
+        Chacun devra être déverrouillé une fois avec le nouveau, connecté à Internet.
+      </p>
+    </Modal>
   )
 }
 
