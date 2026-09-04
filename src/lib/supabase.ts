@@ -75,6 +75,26 @@ function build(storageKey: string): SupabaseClient {
   })
 }
 
+/**
+ * Client jetable, qui ne persiste ni ne rafraichit sa session.
+ *
+ * Il n'existe que pour une chose : inscrire un compte Auth SANS toucher aux
+ * deux sessions en place. `signUp` ouvre une session sur le client qui le
+ * porte ; le faire porter par `supabaseTresorier` couterait la session du
+ * tresorier EN EXERCICE — precisement la seule que
+ * `rotate_treasurer_identity()` accepte, et qu'il faut donc garder intacte
+ * jusqu'a ce que la passation soit enregistree.
+ *
+ * `autoRefreshToken: false` en plus de `persistSession: false` : sans lui, le
+ * client laisse derriere lui un minuteur de rafraichissement sur une session
+ * dont plus personne ne se sert.
+ */
+export function ephemeralClient(): SupabaseClient {
+  return createClient(effectiveUrl, effectiveKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  })
+}
+
 /** Session du bureau : lecture, identite du compte, console plateforme. */
 export const supabase = build('assocaisse.auth.compte')
 
