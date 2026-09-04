@@ -20,6 +20,10 @@ dist-ssr
 
 *.local
 
+# Agent / MCP configs with secrets
+.agents/mcp_config.json
+
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -33,3 +37,6 @@ dist-ssr
 
 # Fichiers de travail temporaires (voir CLAUDE.md)
 .tmp
+.vercel
+.env*
+!.env.example

@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   CalendarClock,
   Database,
@@ -10,6 +10,7 @@ import {
   LifeBuoy,
   RotateCcw,
   ShieldCheck,
+  Smartphone,
   Trash2,
   Upload,
 } from 'lucide-react'
@@ -21,6 +22,8 @@ import { LogoPicker } from '@/components/LogoPicker'
 import { totals } from '@/lib/selectors'
 import { formatDate, formatXOF, periodLabel } from '@/lib/format'
 import { passwordProblem } from '@/lib/auth'
+import { pendingCount } from '@/lib/sync/outbox'
+import { LIMITS } from '@/lib/limits'
 import { ExcelImportError, describeImport, exportWorkbook, importWorkbook } from '@/lib/excel'
 import { effectiveStatus, joursRestants, statusLabel } from '@/lib/subscription'
 import type { DB } from '@/lib/types'
@@ -41,10 +44,29 @@ import {
 export function SettingsPage() {
   const store = useDB()
   const { db, role, isTreasurer } = store
-  const { account, lockTreasurer, changeTreasurerPassword, changeAccountPassword } = usePlatform()
+  const {
+    account,
+    lockTreasurer,
+    changeTreasurerPassword,
+    changeAccountPassword,
+    purgeDevice,
+  } = usePlatform()
   const toast = useToast()
+  const navigate = useNavigate()
 
   const [confirmReset, setConfirmReset] = useState(false)
+  const [confirmPurge, setConfirmPurge] = useState(false)
+
+  // Compté à l'ouverture du dialogue : ce nombre décide du ton de
+  // l'avertissement, entre « hygiène sur appareil partagé » et « vous êtes sur
+  // le point de jeter des versements ».
+  const [pendingOps, setPendingOps] = useState(0)
+  useEffect(() => {
+    if (!confirmPurge || !store.associationId) return
+    void pendingCount(store.associationId)
+      .then(setPendingOps)
+      .catch(() => setPendingOps(0))
+  }, [confirmPurge, store.associationId])
   const [unlockOpen, setUnlockOpen] = useState(false)
   const [passwordModal, setPasswordModal] = useState<'tresorier' | 'compte' | null>(null)
   const [pendingImport, setPendingImport] = useState<DB | null>(null)
@@ -122,6 +144,7 @@ export function SettingsPage() {
               <CommitInput
                 value={a.name}
                 onCommit={(next) => store.updateAssociation({ name: next })}
+                maxLength={LIMITS.associationNom}
                 disabled={!isTreasurer}
               />
             </Field>
@@ -130,6 +153,7 @@ export function SettingsPage() {
                 <CommitInput
                   value={a.acronym}
                   onCommit={(next) => store.updateAssociation({ acronym: next })}
+                  maxLength={LIMITS.associationSigle}
                   disabled={!isTreasurer}
                 />
               </Field>
@@ -137,6 +161,7 @@ export function SettingsPage() {
                 <CommitInput
                   value={a.city}
                   onCommit={(next) => store.updateAssociation({ city: next })}
+                  maxLength={LIMITS.associationVille}
                   placeholder="Ouagadougou"
                   disabled={!isTreasurer}
                 />
@@ -170,6 +195,7 @@ export function SettingsPage() {
                 <CommitInput
                   value={a.treasurerName}
                   onCommit={(next) => store.updateAssociation({ treasurerName: next })}
+                  maxLength={LIMITS.associationTreasurerName}
                   disabled={!isTreasurer}
                 />
               </Field>
@@ -177,6 +203,7 @@ export function SettingsPage() {
                 <CommitInput
                   value={a.presidentName}
                   onCommit={(next) => store.updateAssociation({ presidentName: next })}
+                  maxLength={LIMITS.associationPresidentName}
                   disabled={!isTreasurer}
                 />
               </Field>
@@ -373,6 +400,14 @@ export function SettingsPage() {
                     Vider les données de l'association
                   </Button>
                 )}
+
+                {/* Ouvert aux deux rôles : effacer la copie locale n'écrit rien
+                    sur le serveur, et c'est justement la personne qui rend un
+                    téléphone emprunté qui en a besoin. */}
+                <Button variant="outline" onClick={() => setConfirmPurge(true)}>
+                  <Smartphone className="size-4" />
+                  Effacer les données de cet appareil
+                </Button>
               </div>
 
               <p className="mt-3 flex items-start gap-2 rounded-xl bg-navy-50 px-3.5 py-3 text-xs leading-relaxed text-navy-600">
@@ -470,6 +505,59 @@ export function SettingsPage() {
           <Upload className="mt-0.5 size-4 shrink-0" />
           Exportez d'abord une sauvegarde Excel si vous souhaitez conserver l'historique.
         </div>
+      </Modal>
+
+      <Modal
+        open={confirmPurge}
+        onClose={() => setConfirmPurge(false)}
+        title="Effacer les données de cet appareil ?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmPurge(false)}>
+              Annuler
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                void purgeDevice().finally(() => {
+                  setBusy(false)
+                  setConfirmPurge(false)
+                  navigate('/', { replace: true })
+                })
+              }}
+            >
+              <Smartphone className="size-4" />
+              Effacer et se déconnecter
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-navy-600">
+          La copie locale de <strong className="text-navy-900">{a.name || 'votre association'}</strong>{' '}
+          — grand livre, photos de justificatifs, file d'attente — est supprimée de ce téléphone ou
+          de cet ordinateur, et vous êtes déconnecté. <strong>Rien n'est effacé sur nos serveurs</strong> :
+          une reconnexion retélécharge tout.
+        </p>
+        <p className="mt-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-3 text-xs leading-relaxed text-amber-800">
+          <Upload className="mt-0.5 size-4 shrink-0" />
+          {pendingOps > 0 ? (
+            <span>
+              <strong>
+                {pendingOps === 1
+                  ? "1 opération n'a pas encore été envoyée au serveur et sera perdue."
+                  : `${pendingOps} opérations n'ont pas encore été envoyées au serveur et seront perdues.`}
+              </strong>{' '}
+              Connectez-vous à Internet et attendez la fin de la synchronisation avant d'effacer.
+            </span>
+          ) : (
+            <span>
+              À utiliser avant de prêter ou de rendre cet appareil : sans cela, les données restent
+              lisibles dans le navigateur même une fois déconnecté.
+            </span>
+          )}
+        </p>
       </Modal>
     </>
   )

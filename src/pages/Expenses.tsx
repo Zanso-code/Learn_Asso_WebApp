@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { Expense, ExpenseCategory } from '@/lib/types'
 import { EXPENSE_CATEGORIES } from '@/lib/types'
+import { LIMITS } from '@/lib/limits'
 import { useDB, useStore } from '@/lib/store'
 import { useToast } from '@/components/Toast'
 import { expensesByCategory, totalExpenses } from '@/lib/selectors'
@@ -476,6 +477,7 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
         >
           <Input
             value={form.label}
+            maxLength={LIMITS.depenseLibelle}
             onChange={(e) => setForm({ ...form, label: e.target.value })}
             placeholder="Location de chaises pour l'AG"
             autoFocus
@@ -520,6 +522,7 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
           <Field label="Bénéficiaire" hint="Fournisseur, prestataire ou membre remboursé.">
             <Input
               value={form.beneficiary}
+              maxLength={LIMITS.depenseBeneficiaire}
               onChange={(e) => setForm({ ...form, beneficiary: e.target.value })}
               placeholder="Établissement Wend-Kuuni"
             />
@@ -606,6 +609,7 @@ function ExpenseForm({ expense, onClose }: { expense: Expense | null; onClose: (
         <Field label="Note" hint="Optionnel — référence de facture, précision utile en AG.">
           <Textarea
             value={form.note ?? ''}
+            maxLength={LIMITS.note}
             onChange={(e) => setForm({ ...form, note: e.target.value })}
             placeholder="—"
           />

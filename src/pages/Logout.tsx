@@ -23,8 +23,22 @@ export function Logout() {
     // un aller-retour réseau : sans ce garde, l'effet le rejouerait.
     if (announced.current) return
     announced.current = true
-    void logout()
-    toast.toast('Vous êtes déconnecté', 'info')
+    void logout().then((retained) => {
+      // Le miroir local n'est conservé que s'il reste du travail à envoyer —
+      // et il faut le dire : sur un appareil prêté, ces données restent
+      // lisibles. « Effacer les données de cet appareil », dans les
+      // Paramètres, permet de trancher dans l'autre sens.
+      if (retained > 0) {
+        toast.toast(
+          `Déconnecté. ${retained} opération${retained > 1 ? 's' : ''} non synchronisée${
+            retained > 1 ? 's' : ''
+          } : vos données restent sur cet appareil jusqu'à la prochaine connexion de ce compte.`,
+          'info',
+        )
+      } else {
+        toast.toast('Vous êtes déconnecté — données effacées de cet appareil', 'info')
+      }
+    })
   }, [logout, toast])
 
   if (!session) return <Navigate to="/" replace />

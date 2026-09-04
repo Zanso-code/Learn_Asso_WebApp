@@ -46,10 +46,10 @@ import type {
   StoredSession,
   SubscriptionStatus,
 } from './types'
-import { hashPassword, verifyPassword, type Secret } from './auth'
+import { hasSecret, hashPassword, verifyPassword, type Secret } from './auth'
 import { SESSION_KEY, UNLOCK_ATTEMPTS_KEY, readJSON, removeKey, writeJSON } from './storage'
 import { isOfflineError, setTresorierArme, supabase, supabaseTresorier } from './supabase'
-import { idbGet, idbPut } from './idb'
+import { idbDelete, idbGet, idbPut } from './idb'
 import { defaultCategories } from './seed'
 import { toRow } from './sync/mapping'
 import { currentPeriod } from './format'
@@ -82,12 +82,40 @@ function accountCacheKey(id: string): string {
  * Adresse du compte Tresorier, derivee de celle du compte de l'association.
  *
  * Le formulaire ne demande qu'un e-mail, et il en faut deux : le sous-adressage
- * `+tresorier` en fabrique un second, unique par compte (les adresses de
- * `auth.users` le sont deja) et delivre a la meme boite.
+ * en fabrique un second, unique par compte (les adresses de `auth.users` le
+ * sont deja) et delivre a la meme boite. Cette adresse ne recoit aucun
+ * courriel — la confirmation etant desactivee, elle ne sert qu'a identifier le
+ * compte aupres de GoTrue.
+ *
+ * Le suffixe porte les huit premiers caracteres de l'identifiant de
+ * l'association, et non le seul mot « tresorier ». La forme devinable
+ * permettait de PREEMPTER l'adresse : un attaquant qui connaissait l'e-mail
+ * qu'une association s'appretait a utiliser inscrivait d'abord
+ * `bureau+tresorier@…`, et l'inscription de la victime echouait ensuite sur
+ * « adresse deja utilisee » — laissant `treasurer_user_id` a NULL et le role
+ * Tresorier definitivement inatteignable. L'identifiant est un UUID tire par
+ * la base a l'insertion : il n'est connu qu'apres coup, donc impossible a
+ * preempter.
  */
-export function treasurerEmail(accountEmail: string): string {
+export function treasurerEmail(accountEmail: string, associationId: string): string {
   // Minuscules : GoTrue normalise les adresses qu'il stocke, et cette fonction
   // sert aussi à comparer une session existante à celle attendue.
+  const normalised = accountEmail.trim().toLowerCase()
+  const tag = `tresorier.${associationId.slice(0, 8).toLowerCase()}`
+  const at = normalised.lastIndexOf('@')
+  if (at <= 0) return `${tag}.${normalised}`
+  return `${normalised.slice(0, at)}+${tag}${normalised.slice(at)}`
+}
+
+/**
+ * L'ancienne forme, devinable, conservee en REPLI de connexion.
+ *
+ * Les tresoriers inscrits avant le durcissement portent cette adresse dans
+ * `auth.users`, et rien ne la renomme : la changer exigerait la cle de
+ * service. On tente donc la forme courante, puis celle-ci. Les nouveaux
+ * comptes n'utilisent que la premiere.
+ */
+export function legacyTreasurerEmail(accountEmail: string): string {
   const normalised = accountEmail.trim().toLowerCase()
   const at = normalised.lastIndexOf('@')
   if (at <= 0) return `tresorier.${normalised}`
@@ -137,15 +165,62 @@ function rowToContact(row: Record<string, unknown> | null): PlatformContact {
   }
 }
 
+/** Ce que `authMessage` sait lire : une erreur Supabase, ou son seul message. */
+interface SupabaseErrorLike {
+  message: string
+  /** SQLSTATE Postgres (`42501`…) ou code PostgREST (`PGRST202`…), selon la couche. */
+  code?: string
+  details?: string | null
+  hint?: string | null
+}
+
+const DROITS_MESSAGE = "Vous n'avez pas les droits nécessaires pour cette opération."
+const SCHEMA_MESSAGE =
+  "Base de données non à jour : une migration SQL n'a pas été appliquée. Contactez le support."
+const GENERIC_MESSAGE =
+  'Opération impossible pour le moment. Réessayez, puis contactez le support si cela persiste.'
+
 /**
  * Messages Supabase traduits — l'utilisateur ne lit pas l'anglais.
  *
- * Le repli ne renvoie plus le message brut du serveur : il remontait jusque
- * dans les toasts des noms de tables, de contraintes et de politiques RLS. Le
- * detail technique part en console, ou il sert au diagnostic.
+ * Le toast ne montre plus le message brut du serveur : il y remontait des noms
+ * de tables, de contraintes et de politiques RLS. Mais le brut ne doit pas
+ * disparaitre pour autant — il est journalise SYSTEMATIQUEMENT, y compris pour
+ * les cas traduits. C'est ce qui manquait : un « droits insuffisants » ne disait
+ * pas quelle table refusait, et les deux causes possibles (privilege de colonne
+ * sur `associations`, RLS sur `association_notes`) etaient indiscernables.
+ *
+ * Le SQLSTATE prime sur le texte quand PostgREST le fournit ; GoTrue, lui,
+ * n'envoie pas de code, d'ou le repli par sous-chaines.
  */
-function authMessage(raw: string): string {
-  const text = raw.toLowerCase()
+function authMessage(error: SupabaseErrorLike | string): string {
+  const raw = typeof error === 'string' ? { message: error } : error
+  console.error('Supabase :', {
+    message: raw.message,
+    code: raw.code,
+    details: raw.details,
+    hint: raw.hint,
+  })
+
+  // --- SQLSTATE / code PostgREST : la source la plus sure quand elle existe.
+  switch (raw.code) {
+    // Privilege de table ou de colonne refuse, RLS refusee, ou garde
+    // `is_platform_admin()` de admin_set_subscription — dont le message est en
+    // francais et echappait donc a la reconnaissance par sous-chaine.
+    case '42501':
+      return DROITS_MESSAGE
+    // Colonne, table ou fonction absente : une migration n'a pas ete jouee.
+    case '42703':
+    case '42P01':
+    case '42883':
+    case 'PGRST202':
+    case 'PGRST204':
+      return SCHEMA_MESSAGE
+    case '23514':
+      return 'Une des valeurs saisies dépasse la taille autorisée.'
+  }
+
+  const text = raw.message.toLowerCase()
   if (text.includes('invalid login credentials')) return 'E-mail ou mot de passe incorrect.'
   if (text.includes('already registered') || text.includes('already been registered')) {
     return 'Cet e-mail est déjà utilisé par une autre association.'
@@ -158,13 +233,13 @@ function authMessage(raw: string): string {
     return 'Connexion au serveur impossible. Vérifiez votre réseau.'
   }
   if (text.includes('permission denied') || text.includes('row-level security')) {
-    return "Vous n'avez pas les droits nécessaires pour cette opération."
+    return DROITS_MESSAGE
   }
   if (text.includes('violates check constraint')) {
     return 'Une des valeurs saisies dépasse la taille autorisée.'
   }
-  console.error('Erreur serveur non traduite :', raw)
-  return "Opération impossible pour le moment. Réessayez, puis contactez le support si cela persiste."
+  if (text.includes('does not exist') || text.includes('schema cache')) return SCHEMA_MESSAGE
+  return GENERIC_MESSAGE
 }
 
 function readStoredSession(): StoredSession | null {
@@ -201,7 +276,17 @@ interface PlatformValue {
   createAccount: (input: NewAccountInput) => Promise<AssociationAccount>
   /** Renvoie un message d'erreur en français, ou null si la connexion a réussi. */
   login: (email: string, password: string) => Promise<string | null>
-  logout: () => Promise<void>
+  /**
+   * Renvoie le nombre d'opérations non synchronisées conservées sur l'appareil.
+   * Zéro signifie que le miroir local a bien été effacé.
+   */
+  logout: () => Promise<number>
+  /**
+   * Efface sans condition le miroir local de l'association connectée — grand
+   * livre, photos de justificatifs, file d'attente — puis déconnecte.
+   * Destructif : les écritures en attente sont perdues.
+   */
+  purgeDevice: () => Promise<void>
 
   /** Renvoie un message d'erreur en français, ou null si le rôle est ouvert. */
   unlockTreasurer: (password: string) => Promise<string | null>
@@ -288,24 +373,38 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     [cacheAccount],
   )
 
-  /** Fiche de l'association connectée, secret Trésorier compris. */
-  const fetchOwnAccount = useCallback(async (): Promise<AssociationAccount | null> => {
-    const { data, error } = await supabase
-      .from('associations')
-      .select(ACCOUNT_COLUMNS)
-      .maybeSingle()
-    if (error || !data) return null
+  /**
+   * Fiche de l'association connectée.
+   *
+   * Le condensat Trésorier n'est plus demandé avec la session du bureau : la
+   * politique `treasurer_secrets_select` exige désormais `can_write()`, donc le
+   * rôle Trésorier. Il est lu par `supabaseTresorier`, qui ne rend une ligne
+   * que si une session Trésorier existe déjà sur cet appareil — ce qui est
+   * exactement le cas où ce condensat sert, à savoir le déverrouillage hors
+   * ligne des ouvertures suivantes.
+   *
+   * `fallback` préserve le condensat déjà en cache : une ouverture faite alors
+   * que la session Trésorier a expiré ne doit pas effacer ce qui permettra le
+   * prochain déverrouillage sans réseau.
+   */
+  const fetchOwnAccount = useCallback(
+    async (fallback: Secret = EMPTY_SECRET): Promise<AssociationAccount | null> => {
+      const { data, error } = await supabase
+        .from('associations')
+        .select(ACCOUNT_COLUMNS)
+        .maybeSingle()
+      if (error || !data) return null
 
-    // Table séparée : l'Admin Plateforme lisait auparavant le condensat
-    // Trésorier de chaque association en même temps que sa fiche.
-    const { data: secretRow } = await supabase
-      .from('treasurer_secrets')
-      .select('secret')
-      .maybeSingle()
+      const { data: secretRow } = await supabaseTresorier
+        .from('treasurer_secrets')
+        .select('secret')
+        .maybeSingle()
 
-    const secret = (secretRow?.secret ?? EMPTY_SECRET) as Secret
-    return rowToAccount(data as Record<string, unknown>, secret)
-  }, [])
+      const fresh = secretRow?.secret as Secret | undefined
+      return rowToAccount(data as Record<string, unknown>, hasSecret(fresh) ? fresh! : fallback)
+    },
+    [],
+  )
 
   /* -------------------------------------------------------------- console
    *
@@ -342,34 +441,40 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  /**
+   * Enregistre une fiche depuis la console.
+   *
+   * Deux chemins d'ecriture distincts, et cet ordre precis :
+   *
+   *   1. L'ABONNEMENT d'abord, par `admin_set_subscription`. C'est l'operation
+   *      critique — une association bloquee qui a paye attend son acces. Elle
+   *      passait auparavant en second, derriere l'identite : le moindre refus
+   *      sur `responsable`/`telephone` la faisait sauter en silence, l'admin
+   *      voyant une erreur de droits sans savoir que le renouvellement n'avait
+   *      meme pas ete tente.
+   *   2. L'IDENTITE ensuite, par UPDATE direct — le seul chemin que les
+   *      privileges de colonnes autorisent pour ces champs-la.
+   *
+   * Et surtout : on n'envoie QUE ce qui a change. Le modal transmet toujours
+   * l'integralite de ses champs, y compris ceux auxquels l'admin n'a pas
+   * touche ; sans ce filtrage, prolonger un abonnement declenchait une ecriture
+   * inutile sur `associations` et ecrasait la note interne par une chaine vide.
+   */
   const updateAccount = useCallback(async (id: string, patch: Partial<AssociationAccount>) => {
-    // --- 1. Identité : UPDATE direct, couvert par les privilèges de colonnes.
-    const row: Record<string, unknown> = {}
-    if (patch.nom !== undefined) row.nom = patch.nom
-    if (patch.sigle !== undefined) row.sigle = patch.sigle
-    if (patch.ville !== undefined) row.ville = patch.ville
-    if (patch.pays !== undefined) row.pays = patch.pays
-    if (patch.responsable !== undefined) row.responsable = patch.responsable
-    if (patch.dialCode !== undefined) row.dial_code = patch.dialCode
-    if (patch.telephone !== undefined) row.telephone = patch.telephone
-    if (patch.email !== undefined) row.email = patch.email
+    const current = comptesRef.current.find((c) => c.id === id)
 
-    if (Object.keys(row).length) {
-      const { error } = await supabase.from('associations').update(row).eq('id', id)
-      if (error) throw new Error(authMessage(error.message))
-    }
+    /** Vrai quand le champ est present dans le patch ET reellement different. */
+    const changed = <K extends keyof AssociationAccount>(key: K): boolean =>
+      patch[key] !== undefined && (!current || patch[key] !== current[key])
 
-    // --- 2. Abonnement : les colonnes qui portent le paywall ne sont accordées
+    // --- 1. Abonnement : les colonnes qui portent le paywall ne sont accordées
     // à personne. Cette fonction `security definer` est le seul chemin, et elle
     // vérifie elle-même que l'appelant est bien l'Admin Plateforme. Les élargir
     // par un GRANT offrirait à chaque association un abonnement illimité.
     const touchesSubscription =
-      patch.statut_abonnement !== undefined ||
-      patch.date_expiration_acces !== undefined ||
-      patch.notes !== undefined
+      changed('statut_abonnement') || changed('date_expiration_acces') || changed('notes')
 
     if (touchesSubscription) {
-      const current = comptesRef.current.find((c) => c.id === id)
       // Une chaîne vide n'est pas une date : Postgres refuserait le cast. Mieux
       // vaut refuser ici, avec un message lisible.
       const expiry = patch.date_expiration_acces ?? current?.date_expiration_acces ?? ''
@@ -379,9 +484,36 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         target_id: id,
         new_statut: patch.statut_abonnement ?? current?.statut_abonnement ?? 'essai',
         new_expiry: expiry,
-        new_notes: patch.notes ?? null,
+        // `null` = « ne touche pas à la note ». N'envoyer la note que si elle a
+        // changé évite de l'effacer à chaque simple prolongation.
+        new_notes: changed('notes') ? (patch.notes ?? '') : null,
       })
-      if (error) throw new Error(authMessage(error.message))
+      if (error) throw new Error(authMessage(error))
+    }
+
+    // --- 2. Identité : UPDATE direct, couvert par les privilèges de colonnes.
+    const row: Record<string, unknown> = {}
+    if (changed('nom')) row.nom = patch.nom
+    if (changed('sigle')) row.sigle = patch.sigle
+    if (changed('ville')) row.ville = patch.ville
+    if (changed('pays')) row.pays = patch.pays
+    if (changed('responsable')) row.responsable = patch.responsable
+    if (changed('dialCode')) row.dial_code = patch.dialCode
+    if (changed('telephone')) row.telephone = patch.telephone
+    if (changed('email')) row.email = patch.email
+
+    if (Object.keys(row).length) {
+      const { error } = await supabase.from('associations').update(row).eq('id', id)
+      if (error) {
+        // L'abonnement, lui, est déjà passé : le dire, sinon l'admin refait
+        // l'opération en croyant que rien n'a été enregistré.
+        const detail = authMessage(error)
+        throw new Error(
+          touchesSubscription
+            ? `Abonnement enregistré, mais les coordonnées n'ont pas pu être modifiées. ${detail}`
+            : detail,
+        )
+      }
     }
 
     setComptes((list) => list.map((c) => (c.id === id ? { ...c, ...patch } : c)))
@@ -393,7 +525,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     // Les utilisateurs Supabase Auth survivent : les supprimer exige la clé de
     // service, qui n'a rien à faire dans un navigateur.
     const { error } = await supabase.rpc('admin_delete_association', { target_id: id })
-    if (error) throw new Error(authMessage(error.message))
+    if (error) throw new Error(authMessage(error))
     await clearLedger(id).catch(() => {})
     await clearFor(id).catch(() => {})
     setComptes((list) => list.filter((c) => c.id !== id))
@@ -412,7 +544,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         email: next.email,
       })
       .eq('id', true)
-    if (error) throw new Error(authMessage(error.message))
+    if (error) throw new Error(authMessage(error))
   }, [])
 
   /* ------------------------------------------------------------ démarrage */
@@ -464,7 +596,17 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       const local = readStoredSession()
       if (local) setSession({ associationId: local.associationId, role: 'viewer' })
 
-      const fresh = await fetchOwnAccount()
+      // La fiche en cache est lue AVANT l'appel réseau, pour son condensat
+      // Trésorier : la ligne `treasurer_secrets` n'est désormais lisible que
+      // par une session Trésorier, et celle-ci peut avoir expiré. Sans ce
+      // repli, une simple ouverture en ligne effacerait ce qui permet le
+      // prochain déverrouillage sans réseau.
+      const cached = local
+        ? await idbGet<AssociationAccount>('meta', accountCacheKey(local.associationId))
+        : undefined
+      if (cancelled) return
+
+      const fresh = await fetchOwnAccount(cached?.secretTresorier ?? EMPTY_SECRET)
       if (cancelled) return
 
       if (fresh) {
@@ -472,8 +614,6 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         persistSession({ associationId: fresh.id, role: 'viewer' })
       } else if (local) {
         // Hors ligne : on repart de la fiche mise en cache au dernier passage.
-        const cached = await idbGet<AssociationAccount>('meta', accountCacheKey(local.associationId))
-        if (cancelled) return
         if (cached) cacheAccount(cached)
         else {
           // Ni réseau ni cache, ou association supprimée côté serveur.
@@ -504,19 +644,49 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       target: AssociationAccount,
       password: string,
     ): Promise<string | null> {
-      // Session déjà persistée sur cet appareil : c'est ce qui rend le
-      // déverrouillage possible en réunion, sans réseau.
       const { data: existing } = await supabaseTresorier.auth.getSession()
-      if (existing.session) return null
 
+      // Hors ligne, la session persistée est la SEULE preuve disponible : c'est
+      // le compromis assumé du déverrouillage en réunion, adossé à la garde
+      // PBKDF2 locale de `unlockTreasurer`.
+      //
+      // En ligne, elle ne suffit plus. Elle suffisait, et c'était une faille :
+      // la session survit indéfiniment (`persistSession` + `autoRefreshToken`)
+      // et `lockTreasurer` ne la ferme pas, si bien qu'après le tout premier
+      // déverrouillage plus aucun déverrouillage ne consultait le serveur.
+      // Ne restait alors que la comparaison locale, sans la limitation de
+      // fréquence de GoTrue, et avec pour seul frein un compteur rangé dans
+      // localStorage — donc du côté de l'attaquant, et effaçable.
+      //
+      // Redemander au serveur ne coûte qu'un rafraîchissement de session quand
+      // le mot de passe est le bon.
       if (!navigator.onLine) {
-        return "Premier déverrouillage sur cet appareil : connectez-vous à Internet une fois, puis réessayez."
+        return existing.session
+          ? null
+          : "Premier déverrouillage sur cet appareil : connectez-vous à Internet une fois, puis réessayez."
       }
 
-      const email = treasurerEmail(target.email)
+      const email = treasurerEmail(target.email, target.id)
 
-      const { data: signIn, error: signInError } =
+      let { data: signIn, error: signInError } =
         await supabaseTresorier.auth.signInWithPassword({ email, password })
+
+      // Trésorier inscrit avant le changement de dérivation : son compte porte
+      // encore l'ancienne adresse, et rien ne peut la renommer sans la clé de
+      // service. On retente donc sous l'ancienne forme.
+      if (signInError && !isOfflineError(signInError)) {
+        const legacy = legacyTreasurerEmail(target.email)
+        if (legacy !== email) {
+          const retry = await supabaseTresorier.auth.signInWithPassword({
+            email: legacy,
+            password,
+          })
+          if (!retry.error) {
+            signIn = retry.data
+            signInError = null
+          }
+        }
+      }
 
       if (!signInError && signIn.session && signIn.user) {
         // Fiche antérieure à la migration : le compte existe, le lien manque.
@@ -524,7 +694,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           const { error } = await supabase.rpc('set_treasurer_identity', {
             treasurer_uid: signIn.user.id,
           })
-          if (error) return authMessage(error.message)
+          if (error) return authMessage(error)
         }
         return null
       }
@@ -544,7 +714,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         password,
       })
       if (signUpError || !signUp.user) {
-        return authMessage(signUpError?.message ?? 'Création du rôle Trésorier impossible')
+        return authMessage(signUpError ?? 'Création du rôle Trésorier impossible')
       }
       if (!signUp.session) {
         return "Le compte Trésorier attend une confirmation par e-mail. Désactivez « Confirm email » dans Supabase (Authentication → Providers → Email)."
@@ -553,7 +723,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       const { error: linkError } = await supabase.rpc('set_treasurer_identity', {
         treasurer_uid: signUp.user.id,
       })
-      if (linkError) return authMessage(linkError.message)
+      if (linkError) return authMessage(linkError)
 
       return null
     }
@@ -576,7 +746,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           password: input.motDePasseCompte,
         })
         if (signUpError || !signUp.user) {
-          throw new Error(authMessage(signUpError?.message ?? 'Inscription impossible'))
+          throw new Error(authMessage(signUpError ?? 'Inscription impossible'))
         }
 
         const { data: row, error } = await supabase
@@ -600,7 +770,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           .select(ACCOUNT_COLUMNS)
           .single()
 
-        if (error || !row) throw new Error(authMessage(error?.message ?? 'Création impossible'))
+        if (error || !row) throw new Error(authMessage(error ?? 'Création impossible'))
 
         const associationId = String((row as Record<string, unknown>).id)
 
@@ -611,27 +781,42 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         const { error: secretError } = await supabase
           .from('treasurer_secrets')
           .insert({ association_id: associationId, secret: tresorier })
-        if (secretError) throw new Error(authMessage(secretError.message))
+        if (secretError) throw new Error(authMessage(secretError))
 
         // Identité Trésorier : le compte qui portera toutes les écritures.
-        const email = treasurerEmail(input.email)
+        // L'adresse est dérivée de `associationId`, un UUID que la base vient
+        // seulement de tirer : contrairement à l'ancien suffixe `+tresorier`,
+        // elle ne peut pas avoir été préemptée par un tiers.
+        const email = treasurerEmail(input.email, associationId)
         const { data: tresoSignUp, error: tresoError } = await supabaseTresorier.auth.signUp({
           email,
           password: input.motDePasseTresorier,
         })
+
+        // L'association, elle, EXISTE déjà. Un message qui n'annonce qu'un
+        // échec laisserait le fondateur tout recommencer — et la seconde
+        // inscription échouerait sur « e-mail déjà utilisé », sans issue. Le
+        // rôle Trésorier, lui, se rattrape au premier déverrouillage :
+        // `openTreasurerSession` recrée l'identité manquante et la relie.
+        const rattrapage =
+          " Votre association a bien été créée : connectez-vous, puis activez le rôle Trésorier depuis le bouton « Président / Secrétaire » de l'en-tête."
+
         if (tresoError || !tresoSignUp.user) {
-          throw new Error(authMessage(tresoError?.message ?? 'Création du rôle Trésorier impossible'))
+          throw new Error(
+            authMessage(tresoError ?? 'Création du rôle Trésorier impossible') + rattrapage,
+          )
         }
         if (!tresoSignUp.session) {
           throw new Error(
-            "Le compte Trésorier attend une confirmation par e-mail. Désactivez « Confirm email » dans Supabase (Authentication → Providers → Email).",
+            "Le compte Trésorier attend une confirmation par e-mail. Désactivez « Confirm email » dans Supabase (Authentication → Providers → Email)." +
+              rattrapage,
           )
         }
 
         const { error: linkError } = await supabase.rpc('set_treasurer_identity', {
           treasurer_uid: tresoSignUp.user.id,
         })
-        if (linkError) throw new Error(authMessage(linkError.message))
+        if (linkError) throw new Error(authMessage(linkError))
 
         // Catégories de départ. Elles passent par le client Trésorier : depuis
         // la migration 0002, la RLS refuse toute écriture au compte du bureau.
@@ -639,7 +824,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         const { error: catError } = await supabaseTresorier
           .from('categories')
           .insert(categories.map((c) => toRow('categories', c, associationId)))
-        if (catError) throw new Error(authMessage(catError.message))
+        if (catError) throw new Error(authMessage(catError))
 
         const created = rowToAccount(row as Record<string, unknown>, tresorier)
         cacheAccount(created)
@@ -655,7 +840,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           email: email.trim(),
           password,
         })
-        if (error) return authMessage(error.message)
+        if (error) return authMessage(error)
 
         const fresh = await fetchOwnAccount()
         if (!fresh) {
@@ -663,12 +848,26 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           return "Ce compte n'est rattaché à aucune association."
         }
 
+        // Reconnexion du même compte sur un appareil déjà utilisé : le
+        // condensat mis en cache reste valable, et c'est lui qui autorisera le
+        // déverrouillage hors ligne. Le serveur ne le rendra plus tant qu'une
+        // session Trésorier n'est pas ouverte.
+        if (!hasSecret(fresh.secretTresorier)) {
+          const cached = await idbGet<AssociationAccount>('meta', accountCacheKey(fresh.id))
+          if (hasSecret(cached?.secretTresorier)) {
+            fresh.secretTresorier = cached!.secretTresorier
+          }
+        }
+
         // Une session Trésorier laissée par une AUTRE association sur cet
         // appareil doit partir : la RLS refuserait de toute façon ses
-        // écritures, mais mieux vaut ne pas la laisser traîner.
+        // écritures, mais mieux vaut ne pas la laisser traîner. Les deux formes
+        // d'adresse sont acceptées — un trésorier antérieur au changement de
+        // dérivation porte encore l'ancienne, et sa session est légitime.
         const { data: leftover } = await supabaseTresorier.auth.getSession()
-        const expected = treasurerEmail(fresh.email)
-        if ((leftover.session?.user.email ?? '').toLowerCase() !== expected) {
+        const attendues = [treasurerEmail(fresh.email, fresh.id), legacyTreasurerEmail(fresh.email)]
+        const ouverte = (leftover.session?.user.email ?? '').toLowerCase()
+        if (!attendues.includes(ouverte)) {
           await supabaseTresorier.auth.signOut().catch(() => {})
         }
 
@@ -681,12 +880,19 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
       logout: async () => {
         const id = session?.associationId
+        let retained = 0
         if (id) {
           // Ne jamais jeter du travail non synchronisé : s'il reste des
           // opérations en attente, le miroir local est conservé pour que la
           // prochaine connexion du même compte les retrouve et les envoie.
-          const remaining = await pendingCount(id).catch(() => 0)
-          if (remaining === 0) {
+          //
+          // L'arbitrage est le bon, mais il a une conséquence que l'utilisateur
+          // doit connaître : sur un appareil prêté, le grand livre entier —
+          // noms, téléphones, montants, arriérés, photos de reçus — reste en
+          // clair dans IndexedDB. D'où le compte rendu renvoyé à l'appelant, et
+          // `purgeDevice` pour ceux qui préfèrent tout effacer.
+          retained = await pendingCount(id).catch(() => 0)
+          if (retained === 0) {
             await clearLedger(id).catch(() => {})
             await forgetLocalReceipts(id).catch(() => {})
           }
@@ -694,6 +900,23 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         // Les deux sessions partent : en laisser une derrière soi sur un
         // appareil partagé rendrait le prochain déverrouillage possible sans
         // réseau, donc sans le moindre contrôle serveur.
+        setTresorierArme(false)
+        await supabaseTresorier.auth.signOut().catch(() => {})
+        await supabase.auth.signOut()
+        persistSession(null)
+        setAccount(null)
+        accountRef.current = null
+        return retained
+      },
+
+      purgeDevice: async () => {
+        const id = accountRef.current?.id ?? session?.associationId
+        if (id) {
+          await clearFor(id).catch(() => {})
+          await clearLedger(id).catch(() => {})
+          await forgetLocalReceipts(id).catch(() => {})
+          await idbDelete('meta', accountCacheKey(id)).catch(() => {})
+        }
         setTresorierArme(false)
         await supabaseTresorier.auth.signOut().catch(() => {})
         await supabase.auth.signOut()
@@ -723,7 +946,16 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         // 1. Garde locale : reconnaît le mot de passe sans réseau. Elle ne
         //    donne aucun droit à elle seule — elle évite juste un aller-retour
         //    serveur inutile et permet le cas hors ligne.
-        if (!(await verifyPassword(password, current.secretTresorier))) {
+        //
+        //    Elle ne s'applique que si un condensat est réellement en cache.
+        //    Depuis que sa lecture exige le rôle Trésorier, un appareil qui n'a
+        //    encore jamais ouvert de session Trésorier n'en a aucun : refuser
+        //    d'emblée rendrait le tout premier déverrouillage impossible. Dans
+        //    ce cas, c'est le serveur qui tranche, juste en dessous.
+        if (
+          hasSecret(current.secretTresorier) &&
+          !(await verifyPassword(password, current.secretTresorier))
+        ) {
           writeJSON(UNLOCK_ATTEMPTS_KEY, failed + 1)
           return 'Mot de passe Trésorier incorrect.'
         }
@@ -741,6 +973,20 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
         removeKey(UNLOCK_ATTEMPTS_KEY)
         armTresorier(true)
+
+        // La session Trésorier vient de s'ouvrir : c'est le seul moment où la
+        // RLS laisse lire le condensat. On le met en cache pour que les
+        // ouvertures suivantes puissent se déverrouiller sans réseau — le
+        // condensat ne transite plus jamais par la session du bureau.
+        if (!hasSecret(current.secretTresorier)) {
+          const { data: secretRow } = await supabaseTresorier
+            .from('treasurer_secrets')
+            .select('secret')
+            .maybeSingle()
+          const secret = secretRow?.secret as Secret | undefined
+          if (hasSecret(secret)) cacheAccount({ ...current, secretTresorier: secret! })
+        }
+
         return null
       },
 
@@ -774,7 +1020,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           .from('treasurer_secrets')
           .update({ secret: hashed })
           .eq('association_id', target.id)
-        if (secretError) return authMessage(secretError.message)
+        if (secretError) return authMessage(secretError)
 
         const { error } = await supabaseTresorier.auth.updateUser({ password: next })
         if (error) {
@@ -782,7 +1028,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
             .from('treasurer_secrets')
             .update({ secret: target.secretTresorier })
             .eq('association_id', target.id)
-          return authMessage(error.message)
+          return authMessage(error)
         }
 
         cacheAccount({ ...target, secretTresorier: hashed })
@@ -805,7 +1051,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         if (check) return 'Mot de passe du compte actuel incorrect.'
 
         const { error } = await supabase.auth.updateUser({ password: next })
-        if (error) return authMessage(error.message)
+        if (error) return authMessage(error)
         return null
       },
 
@@ -816,7 +1062,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
           email: email.trim(),
           password,
         })
-        if (error) return authMessage(error.message)
+        if (error) return authMessage(error)
 
         const { data } = await supabase.from('platform_admins').select('user_id').maybeSingle()
         if (!data) {
@@ -849,7 +1095,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         if (check) return 'Mot de passe administrateur actuel incorrect.'
 
         const { error } = await supabase.auth.updateUser({ password: next })
-        return error ? authMessage(error.message) : null
+        return error ? authMessage(error) : null
       },
 
       refreshComptes,

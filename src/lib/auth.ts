@@ -9,12 +9,31 @@
  * and keep this module only for the offline fallback.
  */
 
-const ITERATIONS = 100_000
+/**
+ * Facteur de travail courant, aligné sur la recommandation OWASP pour
+ * PBKDF2-HMAC-SHA256. Six fois le coût précédent — imperceptible pour un
+ * trésorier qui saisit son mot de passe, décisif face à une attaque hors
+ * ligne, qui est le seul scénario réaliste ici (le condensat est mis en cache
+ * sur l'appareil pour permettre le déverrouillage sans réseau).
+ */
+const ITERATIONS = 600_000
+
+/**
+ * Condensats produits avant le durcissement. Ils ne portent pas de champ
+ * `iterations` : les relire avec la valeur courante les rendrait tous
+ * invalides d'un coup, et chaque trésorier se verrait refuser son propre mot
+ * de passe. Ils sont donc vérifiés à leur facteur d'origine, puis réécrits au
+ * facteur courant au prochain changement de mot de passe.
+ */
+const LEGACY_ITERATIONS = 100_000
+
 const encoder = new TextEncoder()
 
 export interface Secret {
   salt: string
   hash: string
+  /** Absent sur les condensats antérieurs — voir `LEGACY_ITERATIONS`. */
+  iterations?: number
 }
 
 function toHex(buffer: ArrayBuffer): string {
@@ -29,12 +48,12 @@ function randomSalt(): string {
   return toHex(bytes.buffer)
 }
 
-async function derive(password: string, salt: string): Promise<string> {
+async function derive(password: string, salt: string, iterations: number): Promise<string> {
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, [
     'deriveBits',
   ])
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: encoder.encode(salt), iterations: ITERATIONS, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: encoder.encode(salt), iterations, hash: 'SHA-256' },
     key,
     256,
   )
@@ -43,7 +62,19 @@ async function derive(password: string, salt: string): Promise<string> {
 
 export async function hashPassword(password: string): Promise<Secret> {
   const salt = randomSalt()
-  return { salt, hash: await derive(password, salt) }
+  return { salt, hash: await derive(password, salt, ITERATIONS), iterations: ITERATIONS }
+}
+
+/**
+ * Vrai quand un condensat exploitable est présent.
+ *
+ * Depuis le durcissement de la politique `treasurer_secrets_select`, seule la
+ * session Trésorier lit cette ligne : sur un appareil qui n'en a jamais ouvert,
+ * le condensat est simplement absent. L'appelant doit alors s'en remettre au
+ * serveur plutôt que refuser d'emblée — voir `unlockTreasurer`.
+ */
+export function hasSecret(secret: Secret | null | undefined): boolean {
+  return Boolean(secret?.salt && secret.hash)
 }
 
 export async function verifyPassword(
@@ -51,7 +82,7 @@ export async function verifyPassword(
   secret: Secret | null | undefined,
 ): Promise<boolean> {
   if (!secret?.salt || !secret.hash) return false
-  const candidate = await derive(password, secret.salt)
+  const candidate = await derive(password, secret.salt, secret.iterations ?? LEGACY_ITERATIONS)
   // Length-constant comparison; both operands are fixed-width hex digests.
   if (candidate.length !== secret.hash.length) return false
   let diff = 0

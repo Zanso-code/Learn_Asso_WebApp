@@ -24,6 +24,7 @@ import { effectiveStatus, extendedExpiry, joursRestants, statusLabel } from '@/l
 import { noticeKindFor, subscriptionNotice } from '@/lib/notices'
 import { formatDate, todayISO, waLink } from '@/lib/format'
 import { passwordProblem } from '@/lib/auth'
+import { LIMITS } from '@/lib/limits'
 import {
   Badge,
   Button,
@@ -694,7 +695,11 @@ function EditAccountModal({
         </div>
 
         <Field label="Responsable">
-          <Input value={responsable} onChange={(e) => setResponsable(e.target.value)} />
+          <Input
+            value={responsable}
+            onChange={(e) => setResponsable(e.target.value)}
+            maxLength={LIMITS.associationResponsable}
+          />
         </Field>
 
         <div className="grid grid-cols-[6rem_1fr] gap-3">
@@ -708,6 +713,7 @@ function EditAccountModal({
           <Field label="Téléphone">
             <Input
               value={telephone}
+              maxLength={LIMITS.associationTelephone}
               onChange={(e) => setTelephone(e.target.value)}
               inputMode="tel"
             />
@@ -715,7 +721,7 @@ function EditAccountModal({
         </div>
 
         <Field label="Notes internes" hint="Référence de paiement, historique — visible ici seulement.">
-          <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={LIMITS.notesAdmin} />
         </Field>
       </div>
     </Modal>
@@ -772,7 +778,7 @@ function ContactModal({ open, onClose }: { open: boolean; onClose: () => void })
     >
       <div className="grid gap-4">
         <Field label="Nom affiché" hint="« Accès expiré — contactez … »">
-          <Input value={nom} onChange={(e) => setNom(e.target.value)} />
+          <Input value={nom} onChange={(e) => setNom(e.target.value)} maxLength={LIMITS.plateformeNom} />
         </Field>
         <div className="grid grid-cols-[6rem_1fr] gap-3">
           <Field label="Indicatif">
@@ -787,6 +793,7 @@ function ContactModal({ open, onClose }: { open: boolean; onClose: () => void })
               value={telephone}
               onChange={(e) => setTelephone(e.target.value)}
               inputMode="tel"
+              maxLength={LIMITS.plateformeTelephone}
               placeholder="70 12 45 89"
             />
           </Field>
@@ -799,6 +806,7 @@ function ContactModal({ open, onClose }: { open: boolean; onClose: () => void })
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            maxLength={LIMITS.plateformeEmail}
             placeholder="contact@assocaisse.bf"
           />
         </Field>
