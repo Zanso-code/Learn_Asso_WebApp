@@ -200,6 +200,21 @@ export interface AssociationAccount {
   date_expiration_acces: string
   date_creation: string
   /**
+   * Vrai quand la base a reconnu dans ce compte les données d'une association
+   * plus ancienne, et lui a fait reprendre la fin d'essai de celle-ci (migration
+   * 0006). Écrit uniquement par la base ; sert à l'écran « accès expiré » à dire
+   * pourquoi. Absent des fiches mises en cache avant la migration — d'où le
+   * traitement en « faux » par défaut.
+   */
+  essaiHerite: boolean
+  /**
+   * Membres autorisés tant que l'association est en essai, ou null : aucun
+   * plafond (associations inscrites avant la migration 0006, qui ne changent
+   * pas de règle en cours de route). La base refuse le membre de trop ; cette
+   * valeur sert à le dire avant.
+   */
+  plafondMembresEssai: number | null
+  /**
    * Secret Trésorier (PBKDF2), lu dans `treasurer_secrets` et mis en cache.
    *
    * Ce n'est plus ce qui *autorise* l'écriture — c'est l'identité Supabase Auth
@@ -225,6 +240,45 @@ export interface AssociationAccount {
    * console — le locataire n'a aucune ligne visible dans cette table.
    */
   notes: string
+}
+
+/**
+ * Motif pour lequel la base rapproche une association d'une autre, plus
+ * ancienne (migration 0006). Les deux premiers appliquent l'héritage d'essai
+ * d'office ; les autres attendent la décision de l'Admin Plateforme.
+ */
+export type TrialSignal =
+  | 'ids_sauvegarde'
+  | 'copie_effectif'
+  | 'sous_ensemble'
+  | 'fondateur_email'
+  | 'fondateur_phone'
+
+export const TRIAL_SIGNAL_LABELS: Record<TrialSignal, string> = {
+  ids_sauvegarde: "Sauvegarde restaurée d'une autre association",
+  copie_effectif: 'Effectif recopié',
+  sous_ensemble: "Partie de l'effectif d'une autre association",
+  fondateur_email: 'Même e-mail de fondateur',
+  fondateur_phone: 'Même téléphone de fondateur',
+}
+
+export type TrialFlagVerdict = 'confirme' | 'legitime'
+
+export interface TrialFlag {
+  id: number
+  associationId: string
+  originId: string
+  /** null : l'association d'origine a été supprimée depuis. */
+  originNom: string | null
+  originDateCreation: string
+  signal: TrialSignal
+  /** Pourcentage de similarité ou d'inclusion, selon le motif. */
+  score: number | null
+  /** `essai_herite` : la fin d'essai de l'originale a été appliquée d'office. */
+  action: 'essai_herite' | 'a_verifier'
+  status: 'ouvert' | TrialFlagVerdict
+  detectedAt: string
+  resolvedAt: string | null
 }
 
 /** Who the association should contact when access is cut off. */

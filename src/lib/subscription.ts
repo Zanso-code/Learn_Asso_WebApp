@@ -40,6 +40,14 @@ export function accessBlockReason(
   return joursRestants(account.date_expiration_acces) < 0 ? 'expire' : null
 }
 
+/**
+ * Version d'essai : pas d'import de sauvegarde, filigrane sur les documents
+ * imprimés, plafond de membres. Seule la base fait respecter ce dernier.
+ */
+export function isTrial(account: Pick<AssociationAccount, 'statut_abonnement'> | null): boolean {
+  return account?.statut_abonnement === 'essai'
+}
+
 export function hasAccess(
   account: Pick<AssociationAccount, 'statut_abonnement' | 'date_expiration_acces'>,
 ): boolean {

@@ -5,6 +5,7 @@ import { useDB } from '@/lib/store'
 import { memberBalance, memberStatement } from '@/lib/selectors'
 import { formatDate, formatDateLong, formatXOF, plainXOF, periodLabel, todayISO, waLink } from '@/lib/format'
 import { Badge, Button, Modal } from './ui'
+import { TrialWatermark } from './TrialWatermark'
 
 function methodLabel(value: string): string {
   return paymentMethodLabel(value)
@@ -81,7 +82,8 @@ export function MemberStatementModal({
         </>
       }
     >
-      <div className="print-page">
+      <div className="print-page relative">
+        <TrialWatermark />
         {/* Printed header — replaces the dialog chrome on paper */}
         <div className="mb-5 hidden border-b-2 border-navy-900 pb-3 print:block">
           <h1 className="text-lg font-extrabold">{db.association.name}</h1>

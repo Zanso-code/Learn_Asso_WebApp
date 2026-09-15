@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Printer, Settings2 } from 'lucide-react'
 import { EXPENSE_CATEGORIES } from '@/lib/types'
 import { useDB } from '@/lib/store'
+import { TrialWatermark } from '@/components/TrialWatermark'
 import {
   arrears,
   campaignRaised,
@@ -117,7 +118,8 @@ export function Report() {
       </div>
 
       {/* ================================================= The printed report */}
-      <Card className="print-root mx-auto max-w-[210mm] p-6 sm:p-10">
+      <Card className="print-root relative mx-auto max-w-[210mm] p-6 sm:p-10">
+        <TrialWatermark />
         <header className="avoid-break border-b-2 border-navy-900 pb-4">
           <div className="flex items-start justify-between gap-6">
             <div className="flex items-start gap-4">

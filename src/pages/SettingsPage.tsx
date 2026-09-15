@@ -26,7 +26,7 @@ import { passwordProblem } from '@/lib/auth'
 import { pendingCount } from '@/lib/sync/outbox'
 import { LIMITS } from '@/lib/limits'
 import { ExcelImportError, describeImport, exportWorkbook, importWorkbook } from '@/lib/excel'
-import { effectiveStatus, joursRestants, statusLabel } from '@/lib/subscription'
+import { effectiveStatus, isTrial, joursRestants, statusLabel } from '@/lib/subscription'
 import type { DB } from '@/lib/types'
 import {
   Badge,
@@ -79,6 +79,7 @@ export function SettingsPage() {
 
   const t = totals(db)
   const a = db.association
+  const trial = isTrial(account)
 
   function exportJSON() {
     const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' })
@@ -399,7 +400,27 @@ export function SettingsPage() {
                   Exporter la sauvegarde (Excel)
                 </Button>
 
-                {isTreasurer && (
+                {/* Pas d'import pendant l'essai : restaurer la sauvegarde d'un
+                    autre compte était le moyen de recycler l'essai gratuit. Une
+                    association qui découvre l'application arrive d'un cahier ou
+                    d'Excel, pas d'une sauvegarde AssoCaisse — elle n'en a pas
+                    besoin. La base reconnaît de toute façon les données venues
+                    d'ailleurs (0006) ; ce bouton masqué évite juste l'impasse. */}
+                {isTreasurer && trial && (
+                  <p className="flex items-start gap-2 rounded-xl border border-navy-200 px-3.5 py-3 text-xs leading-relaxed text-navy-600">
+                    <Upload className="mt-0.5 size-4 shrink-0 text-navy-400" />
+                    <span>
+                      L'import d'une sauvegarde est disponible après activation de l'abonnement.
+                      Vous migrez depuis un autre compte AssoCaisse ?{' '}
+                      <Link to="/contact" className="font-semibold text-brand-700 hover:underline">
+                        Contactez-nous
+                      </Link>
+                      .
+                    </span>
+                  </p>
+                )}
+
+                {isTreasurer && !trial && (
                   <>
                     <Button
                       variant="outline"

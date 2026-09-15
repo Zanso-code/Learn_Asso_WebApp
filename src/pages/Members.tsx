@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   FileText,
   MessageCircle,
@@ -15,6 +16,8 @@ import {
 import type { Category, Member } from '@/lib/types'
 import { LIMITS } from '@/lib/limits'
 import { useDB } from '@/lib/store'
+import { usePlatform } from '@/lib/platform'
+import { isTrial } from '@/lib/subscription'
 import { useToast } from '@/components/Toast'
 import { MemberStatementModal } from '@/components/MemberStatement'
 import { categoryOf, memberBalance } from '@/lib/selectors'
@@ -70,6 +73,7 @@ const BLANK: Omit<Member, 'id'> = {
 export function Members() {
   const store = useDB()
   const { db, isTreasurer } = store
+  const { account } = usePlatform()
   const toast = useToast()
 
   const [query, setQuery] = useState('')
@@ -99,6 +103,13 @@ export function Members() {
   const activeCount = db.members.filter((m) => m.active).length
   const hasFilters = query !== '' || categoryFilter !== 'all' || statusFilter !== 'all'
 
+  // Plafond de la version d'essai. La base refuse de toute façon le membre de
+  // trop ; bloquer ici évite qu'il n'existe que sur ce téléphone, l'envoi au
+  // serveur partant en file morte.
+  const cap = isTrial(account) ? (account?.plafondMembresEssai ?? null) : null
+  const atCap = cap !== null && db.members.length >= cap
+  const nearCap = cap !== null && db.members.length >= cap - 5
+
   return (
     <>
       <PageHeader
@@ -111,7 +122,7 @@ export function Members() {
                 <Settings2 className="size-4" />
                 <span className="hidden sm:inline">Catégories</span>
               </Button>
-              <Button onClick={() => setEditing('new')}>
+              <Button onClick={() => setEditing('new')} disabled={atCap}>
                 <UserPlus className="size-4" />
                 <span className="hidden sm:inline">Nouveau membre</span>
                 <span className="sm:hidden">Ajouter</span>
@@ -120,6 +131,25 @@ export function Members() {
           )
         }
       />
+
+      {isTreasurer && nearCap && cap !== null && (
+        <p
+          className={cx(
+            'mb-4 rounded-xl px-3.5 py-3 text-xs leading-relaxed',
+            atCap ? 'bg-amber-50 text-amber-800' : 'bg-navy-50 text-navy-600',
+          )}
+        >
+          <strong>
+            Version d'essai : {Math.min(db.members.length, cap)} / {cap} membres.
+          </strong>{' '}
+          {atCap
+            ? "Le nombre maximum est atteint : activez l'abonnement pour ajouter d'autres membres."
+            : "Au-delà, l'abonnement doit être activé."}{' '}
+          <Link to="/contact" className="font-semibold underline">
+            Nous contacter
+          </Link>
+        </p>
+      )}
 
       {/* --------------------------------------------------------- Filters */}
       <Card className="mb-4 p-3">
@@ -224,6 +254,10 @@ export function Members() {
           onClose={() => setEditing(null)}
           onSave={(data) => {
             if (editing === 'new') {
+              if (atCap) {
+                toast.error("Version d'essai : nombre maximum de membres atteint.")
+                return
+              }
               store.addMember(data)
               toast.success(`${data.fullName} ajouté(e) au registre`)
             } else {
