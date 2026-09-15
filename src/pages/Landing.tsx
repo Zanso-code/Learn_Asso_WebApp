@@ -366,7 +366,7 @@ function CreateAssociationModal({
       open={open}
       onClose={onClose}
       title="Créer mon association"
-      subtitle="Essai gratuit de 30 jours. Tout est modifiable ensuite dans les paramètres."
+      subtitle="Essai gratuit de 30 jours, jusqu'à 30 membres. Tout est modifiable ensuite dans les paramètres."
       wide
       footer={
         <>

@@ -45,6 +45,8 @@ import type {
   Session,
   StoredSession,
   SubscriptionStatus,
+  TrialFlag,
+  TrialFlagVerdict,
 } from './types'
 import { hasSecret, hashPassword, verifyPassword, type Secret } from './auth'
 import { SESSION_KEY, UNLOCK_ATTEMPTS_KEY, readJSON, removeKey, writeJSON } from './storage'
@@ -78,7 +80,7 @@ const EMPTY_SECRET: Secret = { salt: '', hash: '' }
  * au niveau du type, et une concaténation lui ferait perdre ce littéral.
  */
 const ACCOUNT_COLUMNS =
-  'id, nom, sigle, ville, pays, responsable, dial_code, telephone, email, statut_abonnement, date_expiration_acces, date_creation, treasurer_user_id' as const
+  'id, nom, sigle, ville, pays, responsable, dial_code, telephone, email, statut_abonnement, date_expiration_acces, date_creation, treasurer_user_id, essai_herite, plafond_membres_essai' as const
 
 function accountCacheKey(id: string): string {
   return `account:${id}`
@@ -154,6 +156,9 @@ function rowToAccount(
     statut_abonnement: (s(row.statut_abonnement) || 'essai') as SubscriptionStatus,
     date_expiration_acces: s(row.date_expiration_acces),
     date_creation: s(row.date_creation),
+    essaiHerite: row.essai_herite === true,
+    plafondMembresEssai:
+      typeof row.plafond_membres_essai === 'number' ? row.plafond_membres_essai : null,
     secretTresorier: secret,
     treasurerUserId: typeof row.treasurer_user_id === 'string' ? row.treasurer_user_id : null,
     notes,
@@ -224,6 +229,9 @@ function authMessage(error: SupabaseErrorLike | string): string {
       return SCHEMA_MESSAGE
     case '23514':
       return 'Une des valeurs saisies dépasse la taille autorisée.'
+    // Plafond de membres de la version d'essai (0006 §5).
+    case 'AC001':
+      return "Nombre maximum de membres atteint pour la version d'essai. Activez l'abonnement pour continuer."
   }
 
   const text = raw.message.toLowerCase()
@@ -326,6 +334,10 @@ interface PlatformValue {
   adminLogout: () => Promise<void>
   changeAdminPassword: (current: string, next: string) => Promise<string | null>
   refreshComptes: () => Promise<void>
+  /** Rapprochements d'essai détectés par la base (0006), du plus récent au plus ancien. */
+  trialFlags: TrialFlag[]
+  refreshTrialFlags: () => Promise<void>
+  resolveTrialFlag: (id: number, verdict: TrialFlagVerdict) => Promise<void>
   updateAccount: (id: string, patch: Partial<AssociationAccount>) => Promise<void>
   deleteAccount: (id: string) => Promise<void>
   updateContact: (patch: Partial<PlatformContact>) => Promise<void>
@@ -339,6 +351,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   const [contact, setContact] = useState<PlatformContact>(DEFAULT_CONTACT)
   const [isAdmin, setIsAdmin] = useState(false)
   const [comptes, setComptes] = useState<AssociationAccount[]>([])
+  const [trialFlags, setTrialFlags] = useState<TrialFlag[]>([])
   const [ready, setReady] = useState(false)
   const [treasurerIdentityLegacy, setTreasurerIdentityLegacy] = useState(false)
 
@@ -559,6 +572,52 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
 
     setComptes((list) => list.map((c) => (c.id === id ? { ...c, ...patch } : c)))
   }, [])
+
+  /**
+   * Signalements de recyclage d'essai.
+   *
+   * Un échec est tu : la console doit rester utilisable sur une base où la
+   * migration 0006 n'est pas encore passée — la liste est simplement vide.
+   */
+  const refreshTrialFlags = useCallback(async () => {
+    const { data, error } = await supabase.rpc('admin_trial_flags')
+    if (error || !data) {
+      if (error) console.error('Signalements d’essai indisponibles :', error.message)
+      return
+    }
+    setTrialFlags(
+      (data as Record<string, unknown>[]).map((r) => ({
+        id: Number(r.id),
+        associationId: String(r.association_id),
+        originId: String(r.origin_id),
+        originNom: typeof r.origin_nom === 'string' ? r.origin_nom : null,
+        originDateCreation: String(r.origin_date_creation ?? ''),
+        signal: r.signal as TrialFlag['signal'],
+        score: r.score == null ? null : Number(r.score),
+        action: r.action === 'essai_herite' ? 'essai_herite' : 'a_verifier',
+        status: r.status as TrialFlag['status'],
+        detectedAt: String(r.detected_at ?? ''),
+        resolvedAt: typeof r.resolved_at === 'string' ? r.resolved_at : null,
+      })),
+    )
+  }, [])
+
+  /**
+   * Tranche un signalement. Les deux verdicts peuvent changer la date
+   * d'expiration de l'association (héritage appliqué, ou essai propre rétabli) :
+   * la liste des comptes est donc relue avec celle des signalements.
+   */
+  const resolveTrialFlag = useCallback(
+    async (id: number, verdict: TrialFlagVerdict) => {
+      const { error } = await supabase.rpc('admin_resolve_trial_flag', {
+        flag_id: id,
+        verdict,
+      })
+      if (error) throw new Error(authMessage(error))
+      await Promise.all([refreshTrialFlags(), refreshComptes()])
+    },
+    [refreshTrialFlags, refreshComptes],
+  )
 
   const deleteAccount = useCallback(async (id: string) => {
     // Aucun `grant delete on associations` n'existe — volontairement. La
@@ -1291,6 +1350,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
         await supabase.auth.signOut()
         setIsAdmin(false)
         setComptes([])
+        setTrialFlags([])
       },
 
       changeAdminPassword: async (current, next) => {
@@ -1313,6 +1373,9 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
       },
 
       refreshComptes,
+      trialFlags,
+      refreshTrialFlags,
+      resolveTrialFlag,
       updateAccount,
       deleteAccount,
       updateContact,
@@ -1322,6 +1385,7 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     session,
     contact,
     comptes,
+    trialFlags,
     isAdmin,
     ready,
     applyAccountRow,
@@ -1330,6 +1394,8 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
     persistSession,
     fetchOwnAccount,
     refreshComptes,
+    refreshTrialFlags,
+    resolveTrialFlag,
     updateAccount,
     deleteAccount,
     updateContact,

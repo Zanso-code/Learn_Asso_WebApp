@@ -20,11 +20,19 @@ export function AccessExpired() {
   if (reason === null) return <Navigate to="/app" replace />
 
   const suspended = reason === 'suspendu'
+  // La base a reconnu dans ce compte les données d'une association qui avait
+  // déjà eu son essai (0006) : dire « expiré le … » d'un compte ouvert hier ne
+  // voudrait rien dire.
+  const inherited = !suspended && account.essaiHerite
   const phone = contact.telephone.trim()
   const email = contact.email.trim()
-  const message = `Bonjour ${contact.nom}, je souhaite renouveler l'accès de l'association ${
-    account.sigle || account.nom
-  } à AssoCaisse.`
+  const message = inherited
+    ? `Bonjour ${contact.nom}, je souhaite activer l'abonnement AssoCaisse de l'association ${
+        account.sigle || account.nom
+      } (période d'essai déjà utilisée).`
+    : `Bonjour ${contact.nom}, je souhaite renouveler l'accès de l'association ${
+        account.sigle || account.nom
+      } à AssoCaisse.`
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-navy-50 px-4 py-10">
@@ -35,18 +43,31 @@ export function AccessExpired() {
           </span>
 
           <h1 className="mt-5 text-xl font-extrabold tracking-tight text-navy-900 sm:text-2xl">
-            {suspended ? 'Accès suspendu' : 'Accès expiré'}
+            {suspended
+              ? 'Accès suspendu'
+              : inherited
+                ? "Période d'essai déjà utilisée"
+                : 'Accès expiré'}
           </h1>
 
-          <p className="mt-3 text-sm leading-relaxed text-navy-600">
-            L'accès de <strong className="text-navy-900">{account.nom}</strong>{' '}
-            {suspended ? 'a été suspendu' : 'a pris fin'}
-            {!suspended && account.date_expiration_acces && (
-              <> le {formatDate(account.date_expiration_acces)}</>
-            )}
-            . Vos données sont conservées : elles seront de nouveau accessibles dès le
-            renouvellement.
-          </p>
+          {inherited ? (
+            <p className="mt-3 text-sm leading-relaxed text-navy-600">
+              Les données de <strong className="text-navy-900">{account.nom}</strong> ont déjà
+              bénéficié d'une période d'essai gratuite sur un autre compte AssoCaisse. Vos données
+              sont conservées : elles seront de nouveau accessibles dès l'activation de
+              l'abonnement. S'il s'agit d'une erreur, contactez-nous.
+            </p>
+          ) : (
+            <p className="mt-3 text-sm leading-relaxed text-navy-600">
+              L'accès de <strong className="text-navy-900">{account.nom}</strong>{' '}
+              {suspended ? 'a été suspendu' : 'a pris fin'}
+              {!suspended && account.date_expiration_acces && (
+                <> le {formatDate(account.date_expiration_acces)}</>
+              )}
+              . Vos données sont conservées : elles seront de nouveau accessibles dès le
+              renouvellement.
+            </p>
+          )}
 
           <div className="mt-6 rounded-2xl border border-navy-200 bg-navy-50 p-5 text-left">
             <p className="text-xs font-bold tracking-wide text-navy-500 uppercase">

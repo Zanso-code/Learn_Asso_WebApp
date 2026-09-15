@@ -49,10 +49,14 @@ export function subscriptionNotice(
   const number = phoneLine(contact)
   const blocked = ['expire', 'suspendu'].includes(effectiveStatus(account))
 
+  // Un compte ouvert hier qui a hérité de l'essai d'une association plus
+  // ancienne : « a pris fin il y a dix jours » ne voudrait rien dire pour lui.
   const opening =
-    kind === 'essai'
-      ? `Votre période d'essai gratuite d'AssoCaisse pour l'association ${association} ${deadline}.`
-      : `L'abonnement AssoCaisse de l'association ${association} ${deadline}.`
+    kind === 'essai' && account.essaiHerite
+      ? `La période d'essai gratuite d'AssoCaisse de l'association ${association} a déjà été utilisée sur un autre compte.`
+      : kind === 'essai'
+        ? `Votre période d'essai gratuite d'AssoCaisse pour l'association ${association} ${deadline}.`
+        : `L'abonnement AssoCaisse de l'association ${association} ${deadline}.`
 
   const consequence = blocked
     ? "L'accès à l'application est actuellement suspendu : vos données sont conservées intactes et redeviendront accessibles dès le renouvellement."

@@ -13,13 +13,19 @@ import {
   Search,
   Send,
   ShieldAlert,
+  ShieldQuestion,
   Trash2,
   TriangleAlert,
 } from 'lucide-react'
 import { usePlatform } from '@/lib/platform'
 import { useToast } from '@/components/Toast'
-import type { AssociationAccount, SubscriptionStatus } from '@/lib/types'
-import { SUBSCRIPTION_STATUSES } from '@/lib/types'
+import type {
+  AssociationAccount,
+  SubscriptionStatus,
+  TrialFlag,
+  TrialFlagVerdict,
+} from '@/lib/types'
+import { SUBSCRIPTION_STATUSES, TRIAL_SIGNAL_LABELS } from '@/lib/types'
 import { effectiveStatus, extendedExpiry, joursRestants, statusLabel } from '@/lib/subscription'
 import { noticeKindFor, subscriptionNotice } from '@/lib/notices'
 import { formatDate, todayISO, waLink } from '@/lib/format'
@@ -142,7 +148,7 @@ function AdminGate() {
 /* ---------------------------------------------------------------- Console */
 
 type SortKey = 'nom' | 'statut' | 'expiration' | 'jours' | 'creation'
-type StatusFilter = SubscriptionStatus | 'tous' | 'bientot'
+type StatusFilter = SubscriptionStatus | 'tous' | 'bientot' | 'recyclage'
 
 const STATUS_TONE: Record<SubscriptionStatus, 'brand' | 'amber' | 'red' | 'navy'> = {
   actif: 'brand',
@@ -155,8 +161,16 @@ const STATUS_TONE: Record<SubscriptionStatus, 'brand' | 'amber' | 'red' | 'navy'
 const SOON_DAYS = 7
 
 function Console() {
-  const { comptes, contact, adminLogout, updateAccount, deleteAccount, refreshComptes } =
-    usePlatform()
+  const {
+    comptes,
+    contact,
+    adminLogout,
+    updateAccount,
+    deleteAccount,
+    refreshComptes,
+    trialFlags,
+    refreshTrialFlags,
+  } = usePlatform()
   const toast = useToast()
 
   const [query, setQuery] = useState('')
@@ -165,13 +179,27 @@ function Console() {
   const [asc, setAsc] = useState(true)
   const [editing, setEditing] = useState<AssociationAccount | null>(null)
   const [removing, setRemoving] = useState<AssociationAccount | null>(null)
+  // L'identifiant plutôt que la fiche : après un verdict, la fiche relue doit
+  // s'afficher, pas celle figée à l'ouverture.
+  const [flagsFor, setFlagsFor] = useState<string | null>(null)
 
   // La liste des associations vient du serveur, la console ne la detient plus.
   const [contactOpen, setContactOpen] = useState(false)
 
   useEffect(() => {
     void refreshComptes()
-  }, [refreshComptes])
+    void refreshTrialFlags()
+  }, [refreshComptes, refreshTrialFlags])
+
+  const flagsByAccount = useMemo(() => {
+    const map = new Map<string, TrialFlag[]>()
+    for (const f of trialFlags) {
+      const list = map.get(f.associationId) ?? []
+      list.push(f)
+      map.set(f.associationId, list)
+    }
+    return map
+  }, [trialFlags])
 
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -179,7 +207,15 @@ function Console() {
       const eff = effectiveStatus(c)
       const left = joursRestants(c.date_expiration_acces)
       if (status === 'bientot' && !(left >= 0 && left <= SOON_DAYS)) return false
-      if (status !== 'tous' && status !== 'bientot' && eff !== status) return false
+      if (
+        status === 'recyclage' &&
+        !(flagsByAccount.get(c.id) ?? []).some((f) => f.status === 'ouvert')
+      ) {
+        return false
+      }
+      if (status !== 'tous' && status !== 'bientot' && status !== 'recyclage' && eff !== status) {
+        return false
+      }
       if (!needle) return true
       return [c.nom, c.sigle, c.responsable, c.telephone, c.ville, c.email]
         .join(' ')
@@ -205,7 +241,7 @@ function Console() {
           )
       }
     })
-  }, [comptes, query, status, sort, asc])
+  }, [comptes, query, status, sort, asc, flagsByAccount])
 
   const stats = useMemo(() => {
     let actifs = 0
@@ -326,6 +362,7 @@ function Console() {
             >
               <option value="tous">Tous les statuts</option>
               <option value="bientot">Expire sous {SOON_DAYS} jours</option>
+              <option value="recyclage">Recyclage d'essai à examiner</option>
               {SUBSCRIPTION_STATUSES.map((s) => (
                 <option key={s.value} value={s.value}>
                   {s.label}
@@ -383,6 +420,8 @@ function Console() {
                     const eff = effectiveStatus(account)
                     const left = joursRestants(account.date_expiration_acces)
                     const blocked = eff === 'expire' || eff === 'suspendu'
+                    const flags = flagsByAccount.get(account.id) ?? []
+                    const openFlags = flags.filter((f) => f.status === 'ouvert').length
                     return (
                       <tr key={account.id} className="align-middle hover:bg-navy-50/60">
                         <td className="px-3 py-2.5">
@@ -390,6 +429,24 @@ function Console() {
                           <p className="text-xs text-navy-500">
                             {[account.sigle, account.ville].filter(Boolean).join(' · ') || '—'}
                           </p>
+                          {(flags.length > 0 || account.essaiHerite) && (
+                            <button
+                              onClick={() => setFlagsFor(account.id)}
+                              className="mt-1 flex flex-wrap gap-1"
+                              title="Examiner les signalements de recyclage d'essai"
+                            >
+                              {openFlags > 0 && (
+                                <Badge tone="amber">
+                                  <ShieldQuestion className="size-3" />
+                                  Recyclage ? ({openFlags})
+                                </Badge>
+                              )}
+                              {account.essaiHerite && <Badge tone="red">Essai hérité</Badge>}
+                              {openFlags === 0 && !account.essaiHerite && (
+                                <Badge tone="slate">Signalements traités</Badge>
+                              )}
+                            </button>
+                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           <p className="font-medium text-navy-800">{account.responsable || '—'}</p>
@@ -563,8 +620,171 @@ function Console() {
       </Modal>
 
       <ContactModal open={contactOpen} onClose={() => setContactOpen(false)} />
+
+      {flagsFor && (
+        <TrialFlagsModal
+          account={comptes.find((c) => c.id === flagsFor) ?? null}
+          flags={flagsByAccount.get(flagsFor) ?? []}
+          onClose={() => setFlagsFor(null)}
+        />
+      )}
     </div>
   )
+}
+
+/**
+ * Signalements de recyclage d'essai d'une association.
+ *
+ * Volontairement séparé de la fiche d'édition : un verdict peut changer la date
+ * d'expiration côté serveur, et un formulaire resté ouvert la réécrirait avec
+ * sa valeur figée au prochain « Enregistrer ».
+ */
+function TrialFlagsModal({
+  account,
+  flags,
+  onClose,
+}: {
+  account: AssociationAccount | null
+  flags: TrialFlag[]
+  onClose: () => void
+}) {
+  const { resolveTrialFlag } = usePlatform()
+  const toast = useToast()
+  const [busy, setBusy] = useState<number | null>(null)
+
+  async function decide(flag: TrialFlag, verdict: TrialFlagVerdict) {
+    setBusy(flag.id)
+    try {
+      await resolveTrialFlag(flag.id, verdict)
+      toast.success(
+        verdict === 'confirme'
+          ? "Signalement confirmé — l'essai d'origine s'applique"
+          : 'Signalement classé légitime',
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Décision impossible')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      wide
+      title="Recyclage d'essai"
+      subtitle={account ? account.nom : 'Association introuvable'}
+      footer={
+        <Button variant="ghost" onClick={onClose}>
+          Fermer
+        </Button>
+      }
+    >
+      {account && (
+        <div className="mb-4 grid gap-2 rounded-xl bg-navy-50 px-3.5 py-3 text-xs leading-relaxed text-navy-600 sm:grid-cols-3">
+          <p>
+            <span className="block font-semibold text-navy-500">Statut</span>
+            <span className="font-bold text-navy-900">{statusLabel(effectiveStatus(account))}</span>
+          </p>
+          <p>
+            <span className="block font-semibold text-navy-500">Expiration</span>
+            <span className="tnum font-bold text-navy-900">
+              {formatDate(account.date_expiration_acces)}
+            </span>
+          </p>
+          <p>
+            <span className="block font-semibold text-navy-500">Essai</span>
+            <span className="font-bold text-navy-900">
+              {account.essaiHerite ? 'Hérité d’une autre association' : 'Propre au compte'}
+            </span>
+          </p>
+        </div>
+      )}
+
+      <p className="mb-4 text-xs leading-relaxed text-navy-600">
+        Une sauvegarde restaurée ou un effectif recopié appliquent d'office la fin d'essai de
+        l'association d'origine. Les autres rapprochements n'ont rien changé : ils attendent votre
+        décision. <strong>Confirmer</strong> applique l'essai d'origine ;{' '}
+        <strong>Légitime</strong> rétablit l'essai propre du compte dès qu'aucun autre motif ne
+        tient — sans jamais raccourcir une prolongation accordée.
+      </p>
+
+      {flags.length === 0 ? (
+        <p className="text-sm text-navy-500">Aucun signalement pour cette association.</p>
+      ) : (
+        <ul className="grid gap-2.5">
+          {flags.map((flag) => (
+            <li key={flag.id} className="rounded-xl border border-navy-200 p-3.5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-navy-900">
+                    {TRIAL_SIGNAL_LABELS[flag.signal] ?? flag.signal}
+                  </p>
+                  <p className="mt-0.5 text-xs text-navy-600">
+                    Origine :{' '}
+                    <strong className="text-navy-800">
+                      {flag.originNom ?? 'association supprimée'}
+                    </strong>
+                    {flag.originDateCreation && <> · créée le {formatDate(flag.originDateCreation)}</>}
+                  </p>
+                  <p className="mt-0.5 text-xs text-navy-500">
+                    {scoreLabel(flag)}
+                    Détecté le {formatDate(flag.detectedAt.slice(0, 10))}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <Badge tone={flag.action === 'essai_herite' ? 'red' : 'slate'}>
+                    {flag.action === 'essai_herite' ? 'Essai hérité appliqué' : 'Aucune mesure'}
+                  </Badge>
+                  <Badge
+                    tone={
+                      flag.status === 'ouvert' ? 'amber' : flag.status === 'confirme' ? 'red' : 'brand'
+                    }
+                  >
+                    {flag.status === 'ouvert'
+                      ? 'À examiner'
+                      : flag.status === 'confirme'
+                        ? 'Confirmé'
+                        : 'Légitime'}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null || flag.status === 'legitime'}
+                  onClick={() => decide(flag, 'legitime')}
+                >
+                  <CheckCircle2 className="size-4" />
+                  Légitime
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy !== null || flag.status === 'confirme'}
+                  onClick={() => decide(flag, 'confirme')}
+                >
+                  <ShieldAlert className="size-4" />
+                  Confirmer
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
+  )
+}
+
+function scoreLabel(flag: TrialFlag): string {
+  if (flag.score == null || flag.signal === 'ids_sauvegarde') return ''
+  const pct = `${Math.round(flag.score)} %`
+  if (flag.signal === 'copie_effectif') return `Effectifs identiques à ${pct} · `
+  if (flag.signal === 'sous_ensemble') return `${pct} de l'effectif présent dans l'origine · `
+  return ''
 }
 
 /* ------------------------------------------------------------ Sub-components */
